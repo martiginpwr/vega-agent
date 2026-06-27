@@ -42,6 +42,9 @@ function App() {
   const [isSending, setIsSending] = useState(false);
   const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [error, setError] = useState("");
+  const [traceOpen, setTraceOpen] = useState(false);
+  const [trace, setTrace] = useState(null);
+  const [isTraceLoading, setIsTraceLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [thinkingEnabled, setThinkingEnabled] = useState(false);
@@ -131,7 +134,14 @@ function App() {
       }
 
       setActiveConversationId(data.conversation.id);
-      setMessages(data.messages.map((message) => ({ role: message.role, content: message.content })));
+      setMessages(
+        data.messages.map((message) => ({
+          id: message.id,
+          role: message.role,
+          content: message.content,
+          metadata: message.metadata || {},
+        })),
+      );
       if (data.conversation.selected_model) {
         setSelectedModel(data.conversation.selected_model);
       }
@@ -139,6 +149,26 @@ function App() {
       setError(err.message);
     } finally {
       setIsLoadingConversation(false);
+    }
+  }
+
+  async function openTrace(runId) {
+    if (!runId) return;
+    setIsTraceLoading(true);
+    setTraceOpen(true);
+    setTrace(null);
+    setError("");
+    try {
+      const response = await fetch(`/api/traces/${runId}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not load that trace.");
+      }
+      setTrace(data);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsTraceLoading(false);
     }
   }
 
@@ -165,7 +195,8 @@ function App() {
     const content = draft.trim();
     if (!content || !selectedModel || isSending) return;
 
-    const nextMessages = [...messages, { role: "user", content }];
+    const temporaryUserId = `pending-${Date.now()}`;
+    const nextMessages = [...messages, { id: temporaryUserId, role: "user", content, metadata: {} }];
     setMessages(nextMessages);
     setDraft("");
     setIsSending(true);
@@ -190,7 +221,23 @@ function App() {
       }
 
       setActiveConversationId(data.conversation_id);
-      setMessages((current) => [...current, data.message]);
+      setMessages((current) => [
+        ...current.map((message) =>
+          message.id === temporaryUserId
+            ? {
+                ...message,
+                id: data.user_message_id,
+                metadata: { ...message.metadata, run_id: data.run_id },
+              }
+            : message,
+        ),
+        {
+          id: data.assistant_message_id,
+          role: data.message.role,
+          content: data.message.content,
+          metadata: { run_id: data.run_id },
+        },
+      ]);
       await loadConversations();
     } catch (err) {
       setError(err.message);
@@ -251,7 +298,12 @@ function App() {
 
         <div className={hasMessages ? "conversation" : "conversation empty"}>
           {hasMessages ? (
-            <MessageList messages={messages} isSending={isSending} messagesEndRef={messagesEndRef} />
+            <MessageList
+              messages={messages}
+              isSending={isSending}
+              messagesEndRef={messagesEndRef}
+              onOpenTrace={openTrace}
+            />
           ) : (
             <Welcome onQuickAction={useQuickAction} />
           )}
@@ -317,6 +369,12 @@ function App() {
         messageCount={messages.length}
         onClose={() => setDetailsOpen(false)}
         open={detailsOpen}
+      />
+      <TraceDrawer
+        isLoading={isTraceLoading}
+        onClose={() => setTraceOpen(false)}
+        open={traceOpen}
+        trace={trace}
       />
     </main>
   );
@@ -414,11 +472,15 @@ function Welcome({ onQuickAction }) {
   );
 }
 
-function MessageList({ messages, isSending, messagesEndRef }) {
+function MessageList({ messages, isSending, messagesEndRef, onOpenTrace }) {
   return (
     <div className="message-list" aria-live="polite">
       {messages.map((message, index) => (
-        <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
+        <article
+          className={`message ${message.role} ${message.metadata?.run_id ? "has-trace" : ""}`}
+          key={message.id || `${message.role}-${index}`}
+          onClick={() => onOpenTrace(message.metadata?.run_id)}
+        >
           <div className="message-icon" aria-hidden="true">
             {message.role === "user" ? <MessageCircle size={18} /> : <Bot size={18} />}
           </div>
@@ -468,6 +530,55 @@ function AgentDetails({ currentModel, health, messageCount, onClose, open }) {
         <DetailRow icon={MessageSquare} label="Conversation messages" value={String(messageCount)} />
         <DetailRow icon={Brain} label="Memory" value="Milestone 2" />
         <DetailRow icon={Wrench} label="Tools" value="Milestone 5" />
+      </aside>
+    </div>
+  );
+}
+
+function TraceDrawer({ isLoading, onClose, open, trace }) {
+  return (
+    <div className={open ? "details-layer open trace-layer" : "details-layer trace-layer"} aria-hidden={!open}>
+      <button className="details-backdrop" type="button" aria-label="Close trace" onClick={onClose} />
+      <aside className="details-drawer trace-drawer" aria-label="Trace log">
+        <header>
+          <div>
+            <h2>Trace log</h2>
+            <p>Local backend steps for this message.</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close trace" onClick={onClose}>
+            <X size={19} />
+          </button>
+        </header>
+
+        {isLoading ? (
+          <div className="trace-loading">
+            <Loader2 size={17} />
+            Loading trace...
+          </div>
+        ) : trace ? (
+          <>
+            <div className="trace-summary">
+              <span>Run</span>
+              <strong>{trace.run.status}</strong>
+            </div>
+            <div className="trace-events">
+              {trace.events.map((event) => (
+                <article className="trace-event" key={event.id}>
+                  <div>
+                    <strong>{event.step}</strong>
+                    <span>{event.status}</span>
+                  </div>
+                  <p>{event.message}</p>
+                  {Object.keys(event.metadata || {}).length > 0 ? (
+                    <pre>{JSON.stringify(event.metadata, null, 2)}</pre>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="trace-empty">No trace selected.</p>
+        )}
       </aside>
     </div>
   );

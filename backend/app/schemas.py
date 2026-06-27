@@ -18,6 +18,9 @@ class ChatResponse(BaseModel):
     model: str
     message: ChatMessage
     conversation_id: str
+    run_id: str
+    user_message_id: str
+    assistant_message_id: str
     done: bool = True
 
 
@@ -46,6 +49,7 @@ class StoredMessage(BaseModel):
     content: str
     model: str | None = None
     created_at: str
+    metadata: dict = Field(default_factory=dict)
 
 
 class ConversationSummary(BaseModel):
@@ -77,3 +81,30 @@ class MemoryRecord(BaseModel):
     rationale: str | None = None
     source_conversation_id: str
     created_at: str
+
+
+class TraceEvent(BaseModel):
+    id: str
+    run_id: str
+    step: str
+    status: str
+    message: str
+    metadata: dict = Field(default_factory=dict)
+    created_at: str
+
+
+class AgentRun(BaseModel):
+    id: str
+    conversation_id: str
+    user_message_id: str | None = None
+    assistant_message_id: str | None = None
+    model: str | None = None
+    status: str
+    error: str | None = None
+    created_at: str
+    completed_at: str | None = None
+
+
+class TraceResponse(BaseModel):
+    run: AgentRun
+    events: list[TraceEvent]

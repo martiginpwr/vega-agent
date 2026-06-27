@@ -336,6 +336,14 @@ button {
   gap: 14px;
 }
 
+.message.has-trace {
+  cursor: pointer;
+}
+
+.message.has-trace:hover .message-content {
+  filter: brightness(1.12);
+}
+
 .message.user {
   grid-template-columns: minmax(0, 1fr);
 }
@@ -569,6 +577,95 @@ button {
 .detail-row strong {
   color: #fff;
   font-weight: 600;
+}
+
+.trace-layer {
+  z-index: 25;
+}
+
+.trace-drawer {
+  width: min(460px, 100vw);
+}
+
+.trace-layer.open .trace-drawer {
+  transform: translateX(0);
+}
+
+.trace-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: #cfcfcf;
+}
+
+.trace-loading svg {
+  animation: spin 1s linear infinite;
+}
+
+.trace-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid #242424;
+  color: #aaa;
+}
+
+.trace-summary strong {
+  color: #fff;
+}
+
+.trace-events {
+  display: grid;
+  gap: 12px;
+  overflow: auto;
+}
+
+.trace-event {
+  padding: 12px;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  background: #151515;
+}
+
+.trace-event div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trace-event strong {
+  font-size: 14px;
+}
+
+.trace-event span {
+  color: #aaa;
+  font-size: 12px;
+}
+
+.trace-event p {
+  margin: 8px 0 0;
+  color: #e8e8e8;
+  font-size: 13px;
+}
+
+.trace-event pre {
+  max-height: 180px;
+  margin: 10px 0 0;
+  padding: 10px;
+  overflow: auto;
+  border-radius: 7px;
+  color: #d7d7d7;
+  background: #080808;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+}
+
+.trace-empty {
+  color: #aaa;
 }
 
 @keyframes spin {

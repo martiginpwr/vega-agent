@@ -105,6 +105,31 @@ class Database:
                     vector_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                    id TEXT PRIMARY KEY,
+                    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                    user_message_id TEXT,
+                    assistant_message_id TEXT,
+                    model TEXT,
+                    status TEXT NOT NULL,
+                    error TEXT,
+                    created_at TEXT NOT NULL,
+                    completed_at TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS trace_events (
+                    id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+                    step TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_trace_events_run_created
+                    ON trace_events(run_id, created_at);
                 """
             )
 
@@ -233,7 +258,12 @@ class Database:
                 """,
                 (conversation_id,),
             ).fetchall()
-        return [row_to_dict(row) for row in rows]
+        messages = []
+        for row in rows:
+            message = row_to_dict(row)
+            message["metadata"] = json.loads(message.pop("metadata_json") or "{}")
+            messages.append(message)
+        return messages
 
     def recent_messages(self, conversation_id: str, limit: int = 12) -> list[dict[str, Any]]:
         with self.connect() as connection:
@@ -375,6 +405,97 @@ class Database:
                 """,
                 (status, error, utc_now(), job_id),
             )
+
+    def create_agent_run(self, *, conversation_id: str, model: str) -> dict[str, Any]:
+        run_id = new_id()
+        now = utc_now()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO agent_runs (id, conversation_id, model, status, created_at)
+                VALUES (?, ?, ?, 'started', ?)
+                """,
+                (run_id, conversation_id, model, now),
+            )
+        return self.get_agent_run(run_id)
+
+    def update_agent_run(
+        self,
+        run_id: str,
+        *,
+        status: str,
+        user_message_id: str | None = None,
+        assistant_message_id: str | None = None,
+        error: str | None = None,
+    ) -> None:
+        completed_at = utc_now() if status in {"completed", "failed"} else None
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE agent_runs
+                SET status = ?,
+                    user_message_id = COALESCE(?, user_message_id),
+                    assistant_message_id = COALESCE(?, assistant_message_id),
+                    error = COALESCE(?, error),
+                    completed_at = COALESCE(?, completed_at)
+                WHERE id = ?
+                """,
+                (status, user_message_id, assistant_message_id, error, completed_at, run_id),
+            )
+
+    def add_trace_event(
+        self,
+        *,
+        run_id: str,
+        step: str,
+        status: str,
+        message: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        event_id = new_id()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO trace_events (id, run_id, step, status, message, metadata_json, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (event_id, run_id, step, status, message, json.dumps(metadata or {}), utc_now()),
+            )
+        return self.get_trace_event(event_id)
+
+    def get_trace_event(self, event_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM trace_events WHERE id = ?", (event_id,)).fetchone()
+        if row is None:
+            raise KeyError(event_id)
+        event = row_to_dict(row)
+        event["metadata"] = json.loads(event.pop("metadata_json") or "{}")
+        return event
+
+    def get_agent_run(self, run_id: str) -> dict[str, Any]:
+        with self.connect() as connection:
+            row = connection.execute("SELECT * FROM agent_runs WHERE id = ?", (run_id,)).fetchone()
+        if row is None:
+            raise KeyError(run_id)
+        return row_to_dict(row)
+
+    def get_trace(self, run_id: str) -> dict[str, Any]:
+        run = self.get_agent_run(run_id)
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM trace_events
+                WHERE run_id = ?
+                ORDER BY created_at ASC
+                """,
+                (run_id,),
+            ).fetchall()
+        events = []
+        for row in rows:
+            event = row_to_dict(row)
+            event["metadata"] = json.loads(event.pop("metadata_json") or "{}")
+            events.append(event)
+        return {"run": run, "events": events}
 
 
 database = Database(settings.vega_database_path)

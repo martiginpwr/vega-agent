@@ -65,13 +65,13 @@ Copy `.env.example` to `.env` if you want to override defaults.
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 VEGA_DEFAULT_MODEL=
 VEGA_DATABASE_PATH=storage/vega.db
-VEGA_MEMORY_MODEL=
+VEGA_MEMORY_MODEL=hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:latest
+VEGA_MEMORY_VERIFIER_MODEL=hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:latest
 VEGA_EMBEDDING_MODEL=
 ```
 
 If `VEGA_DEFAULT_MODEL` is empty, the app uses the first model returned by Ollama.
-If `VEGA_MEMORY_MODEL` is empty, chat persistence still works but automatic memory
-classification jobs are skipped.
+`VEGA_MEMORY_MODEL` and `VEGA_MEMORY_VERIFIER_MODEL` default to Qwen2.5 0.5B Instruct.
 If `VEGA_EMBEDDING_MODEL` is set, memory candidates are embedded locally and checked
 against similar existing memories before being stored.
 

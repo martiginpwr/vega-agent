@@ -16,6 +16,7 @@ from backend.app.schemas import (
     MemoryRecord,
     ModelsResponse,
     StoredMessage,
+    TraceResponse,
 )
 
 LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant. You are fluent in English and Russian."""
@@ -42,6 +43,13 @@ def choose_default_model(models):
     return models[0].name if models else None
 
 
+def is_internal_model(model_name: str) -> bool:
+    return model_name in {
+        settings.vega_memory_model,
+        settings.vega_memory_verifier_model,
+    }
+
+
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     connected = await ollama_client.health()
@@ -59,7 +67,7 @@ async def models() -> ModelsResponse:
     except OllamaError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    chat_models = [model for model in local_models if is_chat_model(model)]
+    chat_models = [model for model in local_models if is_chat_model(model) and not is_internal_model(model.name)]
     default_model = settings.vega_default_model or choose_default_model(chat_models)
     if default_model and default_model not in {model.name for model in chat_models}:
         default_model = choose_default_model(chat_models)
@@ -111,6 +119,15 @@ async def list_memories() -> list[MemoryRecord]:
     return [MemoryRecord(**memory) for memory in database.list_memories()]
 
 
+@app.get("/api/traces/{run_id}", response_model=TraceResponse)
+async def get_trace(run_id: str) -> TraceResponse:
+    try:
+        trace = database.get_trace(run_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Trace not found.") from exc
+    return TraceResponse(**trace)
+
+
 @app.post("/api/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     try:
@@ -140,12 +157,34 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         )
 
     conversation_id = conversation["id"]
+    run = database.create_agent_run(conversation_id=conversation_id, model=request.model)
+    run_id = run["id"]
+    database.add_trace_event(
+        run_id=run_id,
+        step="chat.start",
+        status="completed",
+        message="Started local chat run.",
+        metadata={
+            "model": request.model,
+            "conversation_id": conversation_id,
+            "think": request.think,
+        },
+    )
     database.update_conversation_model(conversation_id, request.model)
     user_row = database.add_message(
         conversation_id=conversation_id,
         role="user",
         content=latest_user_message.content,
         model=request.model,
+        metadata={"run_id": run_id},
+    )
+    database.update_agent_run(run_id, status="started", user_message_id=user_row["id"])
+    database.add_trace_event(
+        run_id=run_id,
+        step="chat.persist_user",
+        status="completed",
+        message="Saved user message to SQLite.",
+        metadata={"message_id": user_row["id"]},
     )
     database.maybe_title_from_message(conversation_id, latest_user_message.content)
 
@@ -154,6 +193,13 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         messages = [ChatMessage(role="system", content=LOCAL_SYSTEM_PROMPT), *messages]
 
     try:
+        database.add_trace_event(
+            run_id=run_id,
+            step="model.chat",
+            status="started",
+            message="Sending conversation context to local Ollama chat model.",
+            metadata={"message_count": len(messages), "model": request.model},
+        )
         assistant_message = await ollama_client.chat(
             model=request.model,
             messages=messages,
@@ -161,21 +207,63 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
             think=request.think,
         )
     except OllamaError as exc:
+        database.add_trace_event(
+            run_id=run_id,
+            step="model.chat",
+            status="failed",
+            message="Local Ollama chat model request failed.",
+            metadata={"error": str(exc)},
+        )
+        database.update_agent_run(run_id, status="failed", error=str(exc))
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+    database.add_trace_event(
+        run_id=run_id,
+        step="model.chat",
+        status="completed",
+        message="Received assistant response from local Ollama chat model.",
+        metadata={"response_chars": len(assistant_message.content)},
+    )
 
     assistant_row = database.add_message(
         conversation_id=conversation_id,
         role="assistant",
         content=assistant_message.content,
         model=request.model,
-        metadata={"responding_to": user_row["id"]},
+        metadata={"responding_to": user_row["id"], "run_id": run_id},
+    )
+    database.update_agent_run(
+        run_id,
+        status="completed",
+        assistant_message_id=assistant_row["id"],
+    )
+    database.add_trace_event(
+        run_id=run_id,
+        step="chat.persist_assistant",
+        status="completed",
+        message="Saved assistant response to SQLite.",
+        metadata={"message_id": assistant_row["id"]},
     )
 
     job_id = database.create_memory_job(conversation_id)
-    background_tasks.add_task(classify_memory_for_conversation, conversation_id, job_id)
+    database.add_trace_event(
+        run_id=run_id,
+        step="memory.queue",
+        status="completed",
+        message="Queued automatic memory extraction and verification job.",
+        metadata={
+            "job_id": job_id,
+            "classifier_model": settings.vega_memory_model,
+            "verifier_model": settings.vega_memory_verifier_model,
+            "embedding_model": settings.vega_embedding_model,
+        },
+    )
+    background_tasks.add_task(classify_memory_for_conversation, conversation_id, job_id, run_id)
 
     return ChatResponse(
         model=request.model,
         message=assistant_message,
         conversation_id=assistant_row["conversation_id"],
+        run_id=run_id,
+        user_message_id=user_row["id"],
+        assistant_message_id=assistant_row["id"],
     )
