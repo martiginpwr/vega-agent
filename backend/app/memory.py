@@ -19,11 +19,13 @@ Memory should be saved only for stable, reusable information:
 
 Do not save one-off questions, temporary wording, generic facts, jokes, or content that is not useful later.
 Do not copy instructions, schemas, examples, or placeholder text from the input.
+Assistant messages are context only. They are not evidence for user preferences, user facts, or project decisions.
+Only store a memory when user-authored source_messages explicitly support it.
 The content field must be a complete, concise sentence that will be useful in a future conversation.
 Use only message ids that appear in allowed_source_message_ids.
 
 Output true case:
-{"should_store":true,"memory_type":"preference","content":"The user prefers concise engineering answers with concrete verification steps.","confidence":0.95,"importance":0.8,"rationale":"Stable user preference explicitly stated.","action":"save_new","related_memory_ids":[],"source_message_ids":["message-id-from-input"]}
+{"should_store":true,"memory_type":"preference","content":"The user prefers concise engineering answers with concrete verification steps.","confidence":0.95,"importance":0.8,"rationale":"Stable user preference explicitly stated.","action":"save_new","related_memory_ids":[],"source_message_ids":["use-a-real-id-from-allowed_source_message_ids"]}
 
 Output false case:
 {"should_store":false,"memory_type":"none","content":"","confidence":0.0,"importance":0.0,"rationale":"No durable reusable information.","action":"no_op","related_memory_ids":[],"source_message_ids":[]}
@@ -71,17 +73,6 @@ def clamp_score(value: Any) -> float | None:
 
 def build_review_packet(conversation_id: str) -> str:
     recent_messages = database.recent_messages(conversation_id, limit=10)
-    existing_memories = database.list_memories(limit=30)
-
-    memory_preview = [
-        {
-            "id": memory["id"],
-            "type": memory["type"],
-            "content": memory["content"],
-            "status": memory["status"],
-        }
-        for memory in existing_memories[:10]
-    ]
     message_preview = [
         {
             "id": message["id"],
@@ -89,15 +80,24 @@ def build_review_packet(conversation_id: str) -> str:
             "content": message["content"],
         }
         for message in recent_messages
-        if message["role"] in {"user", "assistant"}
+        if message["role"] == "user"
+    ]
+    assistant_context = [
+        {
+            "id": message["id"],
+            "role": message["role"],
+            "content": message["content"],
+        }
+        for message in recent_messages
+        if message["role"] == "assistant"
     ]
 
     return json.dumps(
         {
             "conversation_id": conversation_id,
-            "recent_messages": message_preview,
+            "source_messages": message_preview,
+            "assistant_context_not_evidence": assistant_context,
             "allowed_source_message_ids": [message["id"] for message in message_preview],
-            "similar_existing_memories": memory_preview,
         },
         ensure_ascii=False,
     )
@@ -106,8 +106,78 @@ def build_review_packet(conversation_id: str) -> str:
 def valid_source_message_ids(conversation_id: str, ids: Any) -> list[str]:
     if not isinstance(ids, list):
         return []
-    valid_ids = {message["id"] for message in database.recent_messages(conversation_id, limit=10)}
+    valid_ids = {
+        message["id"]
+        for message in database.recent_messages(conversation_id, limit=10)
+        if message["role"] == "user"
+    }
     return [message_id for message_id in ids if isinstance(message_id, str) and message_id in valid_ids]
+
+
+STOPWORDS = {
+    "about",
+    "assistant",
+    "future",
+    "memory",
+    "prefer",
+    "prefers",
+    "preference",
+    "question",
+    "questions",
+    "response",
+    "responses",
+    "their",
+    "there",
+    "user",
+    "vega",
+    "with",
+}
+
+
+def content_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[a-zA-Z0-9]+", value.lower())
+        if len(token) >= 4 and token not in STOPWORDS
+    }
+
+
+def validate_candidate_grounding(
+    *,
+    conversation_id: str,
+    candidate: dict[str, Any],
+    content: str,
+) -> tuple[bool, str, list[str]]:
+    source_message_ids = valid_source_message_ids(conversation_id, candidate.get("source_message_ids", []))
+    messages = {
+        message["id"]: message
+        for message in database.recent_messages(conversation_id, limit=10)
+        if message["role"] == "user"
+    }
+    if not source_message_ids:
+        source_message_ids = list(messages.keys())
+        source_id_reason = "Candidate omitted valid source ids; grounding was checked against recent user messages."
+    else:
+        source_id_reason = "Candidate is grounded in cited user-authored source messages."
+
+    if not source_message_ids:
+        return False, "No user-authored source messages were available.", []
+
+    evidence = " ".join(messages[message_id]["content"] for message_id in source_message_ids if message_id in messages)
+    evidence_tokens = content_tokens(evidence)
+    memory_tokens = content_tokens(content)
+    if not memory_tokens:
+        return False, "Candidate content had no meaningful grounded terms.", source_message_ids
+
+    overlap = memory_tokens & evidence_tokens
+    support_ratio = len(overlap) / len(memory_tokens)
+    if not overlap or support_ratio < 0.4:
+        return (
+            False,
+            "Candidate content was not grounded in the cited user message text.",
+            source_message_ids,
+        )
+    return True, source_id_reason, source_message_ids
 
 
 def looks_like_prompt_echo(value: str) -> bool:
@@ -117,7 +187,6 @@ def looks_like_prompt_echo(value: str) -> bool:
         "optional existing memory ids",
         "message ids supporting this decision",
         "response_schema",
-        "candidate",
         "similar_memories",
         "reply exactly",
     ]
@@ -181,6 +250,21 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
         should_store = bool(candidate.get("should_store"))
         action = str(candidate.get("action") or "no_op")
         content = str(candidate.get("content") or "").strip()
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.classifier",
+            status="completed",
+            message="Classifier returned a memory candidate decision.",
+            metadata={
+                "should_store": should_store,
+                "action": action,
+                "memory_type": candidate.get("memory_type"),
+                "content": content,
+                "confidence": candidate.get("confidence"),
+                "importance": candidate.get("importance"),
+                "source_message_ids": candidate.get("source_message_ids", []),
+            },
+        )
 
         if looks_like_prompt_echo(content):
             database.add_trace_event(
@@ -203,6 +287,36 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
             )
             database.complete_memory_job(job_id, status="completed")
             return
+
+        grounded, grounding_reason, source_message_ids = validate_candidate_grounding(
+            conversation_id=conversation_id,
+            candidate=candidate,
+            content=content,
+        )
+        if not grounded:
+            database.add_trace_event(
+                run_id=run_id,
+                step="memory.grounding",
+                status="completed",
+                message="Candidate rejected because it was not grounded in user-authored source messages.",
+                metadata={
+                    "reason": grounding_reason,
+                    "candidate_content": content,
+                    "source_message_ids": source_message_ids,
+                },
+            )
+            database.complete_memory_job(job_id, status="completed")
+            return
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.grounding",
+            status="completed",
+            message="Candidate passed user-source grounding checks.",
+            metadata={
+                "reason": grounding_reason,
+                "source_message_ids": source_message_ids,
+            },
+        )
 
         confidence = clamp_score(candidate.get("confidence"))
         importance = clamp_score(candidate.get("importance"))
@@ -259,7 +373,6 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
             return
 
         status = "active" if (confidence or 0) >= 0.78 and (importance or 0) >= 0.45 else "suggested"
-        source_message_ids = valid_source_message_ids(conversation_id, candidate.get("source_message_ids", []))
 
         memory = database.add_memory(
             memory_type=str(candidate.get("memory_type") or "fact"),
