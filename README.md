@@ -80,6 +80,7 @@ against similar existing memories before being stored.
 - [Architecture](docs/architecture.md)
 - [Project Plan](docs/project-plan.md)
 - [Memory Model Research](docs/memory-model-research.md)
+- [Verification Standard](docs/verification.md)
 - [Research Notes](docs/research.md)
 - [Roadmap](docs/roadmap.md)
 - [Learning Path](docs/learning-path.md)

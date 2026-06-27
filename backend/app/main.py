@@ -19,7 +19,7 @@ from backend.app.schemas import (
     TraceResponse,
 )
 
-LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant. You are fluent in English."""
+LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant. You are fluent in English and Russian."""
 
 app = FastAPI(title="Vega Agent API", version="0.1.0")
 

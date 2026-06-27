@@ -47,6 +47,7 @@ class OllamaClient:
         messages: list[ChatMessage],
         temperature: float,
         think: bool | None = None,
+        response_format: str | None = None,
     ) -> ChatMessage:
         payload = {
             "model": model,
@@ -56,6 +57,8 @@ class OllamaClient:
         }
         if think is not None:
             payload["think"] = think
+        if response_format is not None:
+            payload["format"] = response_format
 
         try:
             async with httpx.AsyncClient(timeout=120) as client:
