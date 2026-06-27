@@ -264,6 +264,7 @@ The docs should grow with the code:
 
 - `docs/project-plan.md`: where the project is headed.
 - `docs/architecture.md`: how the system is structured now.
+- `docs/memory-model-research.md`: local model strategy for automatic memory.
 - `docs/research.md`: source-backed research notes.
 - `docs/learning-path.md`: concepts to learn by milestone.
 - Future `docs/components/*.md`: deep dives for memory, RAG, tools, routing, and skills.

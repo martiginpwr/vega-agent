@@ -6,18 +6,14 @@ import {
   CheckCircle2,
   ChevronDown,
   CircleAlert,
-  Database,
   FileText,
-  Folder,
   Info,
   Loader2,
   Menu,
   MessageCircle,
   MessageSquare,
   MessageSquarePlus,
-  Mic,
   PanelLeft,
-  Plus,
   Search,
   Send,
   Sparkles,
@@ -28,17 +24,10 @@ import "./styles.css";
 
 const seedMessages = [];
 
-const sessions = [
-  "Local AI Agent Development",
-  "Memory Design Notes",
-  "RAG Architecture Sketch",
-  "Tool Safety Model",
-];
-
 const quickActions = [
-  { label: "Plan architecture", icon: FileText },
-  { label: "Summarize notes", icon: Brain },
-  { label: "Inspect local docs", icon: Search },
+  { label: "Plan Vega memory", icon: Brain },
+  { label: "Explain architecture", icon: FileText },
+  { label: "Draft next step", icon: Search },
 ];
 
 function App() {
@@ -51,7 +40,6 @@ function App() {
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
   const [detailsOpen, setDetailsOpen] = useState(false);
-  const [activeSession, setActiveSession] = useState(sessions[0]);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -105,7 +93,6 @@ function App() {
     setMessages([]);
     setDraft("");
     setError("");
-    setActiveSession("New local chat");
   }
 
   function useQuickAction(label) {
@@ -158,9 +145,7 @@ function App() {
   return (
     <main className={sidebarOpen ? "app-shell sidebar-expanded" : "app-shell sidebar-collapsed"}>
       <Sidebar
-        activeSession={activeSession}
         onNewChat={startNewChat}
-        onSelectSession={setActiveSession}
         onToggle={() => setSidebarOpen((value) => !value)}
         open={sidebarOpen}
       />
@@ -210,9 +195,6 @@ function App() {
         ) : null}
 
         <form className="composer" onSubmit={sendMessage}>
-          <button className="composer-icon" type="button" aria-label="Attach local context">
-            <Plus size={21} />
-          </button>
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -241,9 +223,6 @@ function App() {
               ))
             )}
           </select>
-          <button className="composer-icon" type="button" aria-label="Voice input">
-            <Mic size={19} />
-          </button>
           <button className="send-button" disabled={!draft.trim() || !selectedModel || isSending} aria-label="Send">
             {isSending ? <Loader2 size={20} /> : <Send size={19} />}
           </button>
@@ -261,7 +240,7 @@ function App() {
   );
 }
 
-function Sidebar({ activeSession, onNewChat, onSelectSession, onToggle, open }) {
+function Sidebar({ onNewChat, onToggle, open }) {
   return (
     <aside className="sidebar" aria-label="Conversations">
       <div className="sidebar-brand">
@@ -284,37 +263,11 @@ function Sidebar({ activeSession, onNewChat, onSelectSession, onToggle, open }) 
           <MessageSquarePlus size={19} />
           {open ? <span>New chat</span> : null}
         </button>
-        <button className="nav-item" type="button" title="Search chats">
-          <Search size={19} />
-          {open ? <span>Search chats</span> : null}
-        </button>
-        <button className="nav-item" type="button" title="Local library">
-          <Database size={19} />
-          {open ? <span>Local library</span> : null}
-        </button>
-        <button className="nav-item" type="button" title="Projects">
-          <Folder size={19} />
-          {open ? <span>Projects</span> : null}
-        </button>
       </nav>
 
       {open ? (
-        <section className="session-section">
-          <p>Pinned</p>
-          <button className="session-row" type="button" onClick={() => onSelectSession("Agent roadmap")}>
-            Agent roadmap
-          </button>
-          <p>Recents</p>
-          {sessions.map((session) => (
-            <button
-              className={session === activeSession ? "session-row selected" : "session-row"}
-              key={session}
-              type="button"
-              onClick={() => onSelectSession(session)}
-            >
-              {session}
-            </button>
-          ))}
+        <section className="sidebar-note">
+          <p>Conversation history will appear here after SQLite persistence lands.</p>
         </section>
       ) : null}
 

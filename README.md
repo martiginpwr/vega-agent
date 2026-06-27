@@ -72,6 +72,7 @@ If `VEGA_DEFAULT_MODEL` is empty, the app uses the first model returned by Ollam
 
 - [Architecture](docs/architecture.md)
 - [Project Plan](docs/project-plan.md)
+- [Memory Model Research](docs/memory-model-research.md)
 - [Research Notes](docs/research.md)
 - [Roadmap](docs/roadmap.md)
 - [Learning Path](docs/learning-path.md)
