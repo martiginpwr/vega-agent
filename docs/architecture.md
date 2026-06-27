@@ -53,7 +53,33 @@ Vega should use three different concepts instead of one overloaded memory bucket
 - Working context: the subset of history and retrieved data used in the current model call.
 - Long-term memory: durable facts, preferences, project notes, and reusable lessons.
 
-Memory storage should include provenance: when it was created, from which session, why it was considered useful, and when it was last used. This makes deletion, inspection, and correction possible.
+Memory creation should be automatic and classifier-driven. The system should not use simple keyword rules as the primary signal because natural conversations are too creative and varied. After each conversation turn is saved, a background local classifier/extractor should decide whether the exchange contains memory-worthy information, what type of memory it is, and how confident the system should be.
+
+The first implementation can use the currently selected local chat model for structured extraction. The architecture should still isolate this behind a memory-classifier interface so it can later move to a smaller local model without changing storage or retrieval code.
+
+Memory storage should include provenance: when it was created, from which session, which messages caused it, why it was considered useful, and when it was last used. This makes deletion, inspection, correction, deduplication, and conflict handling possible.
+
+Initial memory types:
+
+- `preference`: user style or behavior preferences.
+- `identity`: stable user details.
+- `project`: durable project constraints and decisions.
+- `fact`: stable factual information the user provided.
+- `procedure`: recurring workflow instructions.
+- `correction`: corrections to Vega's assumptions or behavior.
+- `skill_candidate`: patterns that might become reusable workflows later.
+
+Memory pipeline:
+
+```text
+messages persisted
+  -> background memory job
+  -> local classifier/extractor
+  -> candidate memories with type, confidence, importance, and rationale
+  -> duplicate and conflict check
+  -> active or suggested memory record
+  -> future retrieval into working context
+```
 
 ## Retrieval Design
 

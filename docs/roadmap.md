@@ -22,8 +22,10 @@ Status: started.
 
 ## Milestone 2: Memory
 
-- Add explicit "save memory" action.
+- Add automatic local memory candidate detection.
+- Add local classifier/extractor interface for memory type, confidence, importance, and rationale.
 - Store memories in SQLite with type, source, confidence, and timestamps.
+- Add dedupe and conflict checks before activating memories.
 - Add retrieval of relevant memories into chat context.
 - Add user controls for edit/delete/disable memory.
 
@@ -51,7 +53,6 @@ Status: started.
 
 ## Milestone 6: Routing And Small Models
 
-- Add deterministic routing rules.
 - Add small local classifier experiments for memory candidacy, intent classification, and tool eligibility.
 - Compare model cost, latency, and quality.
 

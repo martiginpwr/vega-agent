@@ -17,7 +17,8 @@ Vega is a local-first agent workbench:
 - Start with one useful vertical slice, then deepen it.
 - Keep the visible UI quiet. Advanced state belongs behind drawers, modals, traces, or developer views.
 - Treat the transcript, working context, long-term memory, retrieved documents, and generated skills as different artifacts.
-- Use the strongest local model for broad reasoning and smaller local models or deterministic rules for cheap classification, routing, and memory candidacy.
+- Use the strongest local model for broad reasoning and smaller local classifier/extractor models for memory candidacy, routing, and other cheap background judgments.
+- Do not rely on keyword rules for memory creation. Conversations are too varied, and brittle heuristics can flood memory with low-quality entries.
 - Every automated action should leave a local audit trail the user can inspect.
 - Prefer human approval for durable memory, file writes, shell execution, and reusable skills until the system has earned trust.
 
@@ -87,19 +88,32 @@ Design choice:
 
 ### Phase 2: Memory
 
-Purpose: let Vega remember stable facts and preferences without stuffing every chat into context.
+Purpose: let Vega automatically remember stable facts, preferences, project constraints, corrections, and reusable patterns without stuffing every chat into context.
 
 Features:
 
-- Manual "save memory" action first.
+- Automatic memory candidate detection after conversation turns.
+- Local classifier/extractor model for memory candidacy and memory type.
+- Confidence, importance, duplicate, and conflict checks before a memory becomes active.
 - Memory editor with delete/disable.
 - Memory metadata: source message, reason, confidence, created date, last used date.
 - Retrieval of relevant memories into future chats.
 
-Later:
+Memory pipeline:
 
-- Local memory-candidate classifier.
-- Human approval queue for suggested memories.
+```text
+new messages saved
+  -> background memory job
+  -> local classifier/extractor
+  -> structured memory candidates
+  -> duplicate and conflict check
+  -> save active or suggested memory
+  -> expose provenance and controls in the UI
+```
+
+Design choice:
+
+- Memory should be automatic by default, but never invisible. The user should be able to inspect, edit, disable, or delete any stored memory.
 
 ### Phase 3: Local RAG
 
@@ -166,7 +180,6 @@ Purpose: avoid using a 7B-14B chat model for every tiny decision.
 
 Features:
 
-- Deterministic routing rules first.
 - Lightweight local classifiers for intent, memory candidacy, and retrieval need.
 - Latency and quality comparisons.
 
@@ -235,14 +248,15 @@ Practical implications:
 
 1. Simplify and verify the chat UI.
 2. Add SQLite conversation persistence.
-3. Add streaming Ollama responses.
-4. Add local memory storage and manual memory controls.
-5. Add local embeddings and document retrieval.
-6. Add context compaction.
-7. Add a typed tool registry with read-only tools.
-8. Add routing and classifier experiments.
-9. Add skill-candidate generation behind human approval.
-10. Add local evals and regression tests.
+3. Add automatic local memory classification and extraction.
+4. Add memory storage, provenance, dedupe/conflict checks, and user controls.
+5. Add streaming Ollama responses.
+6. Add local embeddings and document retrieval.
+7. Add context compaction.
+8. Add a typed tool registry with read-only tools.
+9. Add routing and classifier experiments.
+10. Add skill-candidate generation behind human approval.
+11. Add local evals and regression tests.
 
 ## Documentation Plan
 
