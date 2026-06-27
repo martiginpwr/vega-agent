@@ -532,6 +532,8 @@ button {
   position: absolute;
   top: 0;
   right: 0;
+  display: flex;
+  flex-direction: column;
   width: min(390px, 100vw);
   height: 100%;
   padding: 20px;
@@ -618,7 +620,11 @@ button {
 
 .trace-events {
   display: grid;
+  align-content: start;
+  flex: 1;
   gap: 12px;
+  min-height: 0;
+  padding-right: 4px;
   overflow: auto;
 }
 
