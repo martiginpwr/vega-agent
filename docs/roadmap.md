@@ -1,5 +1,7 @@
 # Roadmap
 
+For the broader project direction, see [Project Plan](project-plan.md). This file tracks implementation milestones.
+
 ## Milestone 0: Local Chat Foundation
 
 Status: started.

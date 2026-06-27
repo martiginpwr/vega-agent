@@ -71,6 +71,7 @@ If `VEGA_DEFAULT_MODEL` is empty, the app uses the first model returned by Ollam
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Project Plan](docs/project-plan.md)
 - [Research Notes](docs/research.md)
 - [Roadmap](docs/roadmap.md)
 - [Learning Path](docs/learning-path.md)

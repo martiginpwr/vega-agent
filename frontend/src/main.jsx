@@ -1,31 +1,44 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
-  BookOpen,
   Bot,
   Brain,
+  CheckCircle2,
   ChevronDown,
+  CircleAlert,
   Database,
-  Hammer,
+  FileText,
+  Folder,
+  Info,
   Loader2,
+  Menu,
+  MessageCircle,
+  MessageSquare,
   MessageSquarePlus,
   Mic,
-  PanelRight,
+  PanelLeft,
   Plus,
+  Search,
   Send,
-  Settings,
-  SlidersHorizontal,
   Sparkles,
-  UserRound,
+  Wrench,
+  X,
 } from "lucide-react";
 import "./styles.css";
 
-const seedMessages = [
-  {
-    role: "assistant",
-    content:
-      "Hi, I am Vega. I am running locally through Ollama. Pick a model, ask a question, and we will build the agent layer piece by piece.",
-  },
+const seedMessages = [];
+
+const sessions = [
+  "Local AI Agent Development",
+  "Memory Design Notes",
+  "RAG Architecture Sketch",
+  "Tool Safety Model",
+];
+
+const quickActions = [
+  { label: "Plan architecture", icon: FileText },
+  { label: "Summarize notes", icon: Brain },
+  { label: "Inspect local docs", icon: Search },
 ];
 
 function App() {
@@ -36,6 +49,10 @@ function App() {
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
   const [error, setError] = useState("");
+  const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [activeSession, setActiveSession] = useState(sessions[0]);
+  const messagesEndRef = useRef(null);
 
   useEffect(() => {
     async function loadStatus() {
@@ -63,7 +80,37 @@ function App() {
     loadStatus();
   }, []);
 
-  const contextCount = useMemo(() => messages.length, [messages]);
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(max-width: 760px)");
+    const syncSidebarWithViewport = () => setSidebarOpen(!mediaQuery.matches);
+
+    syncSidebarWithViewport();
+    mediaQuery.addEventListener("change", syncSidebarWithViewport);
+
+    return () => mediaQuery.removeEventListener("change", syncSidebarWithViewport);
+  }, []);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [messages, isSending]);
+
+  const currentModel = useMemo(
+    () => models.find((model) => model.name === selectedModel),
+    [models, selectedModel],
+  );
+
+  const hasMessages = messages.length > 0;
+
+  function startNewChat() {
+    setMessages([]);
+    setDraft("");
+    setError("");
+    setActiveSession("New local chat");
+  }
+
+  function useQuickAction(label) {
+    setDraft(label);
+  }
 
   async function sendMessage(event) {
     event.preventDefault();
@@ -109,45 +156,78 @@ function App() {
   }
 
   return (
-    <main className="app-shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="brand-mark">
-            <Sparkles size={20} />
-          </div>
-          <span>Vega Agent</span>
-          <button className="icon-button" aria-label="Toggle sidebar">
-            <PanelRight size={18} />
+    <main className={sidebarOpen ? "app-shell sidebar-expanded" : "app-shell sidebar-collapsed"}>
+      <Sidebar
+        activeSession={activeSession}
+        onNewChat={startNewChat}
+        onSelectSession={setActiveSession}
+        onToggle={() => setSidebarOpen((value) => !value)}
+        open={sidebarOpen}
+      />
+
+      <section className="chat-surface" aria-label="Local chat">
+        <header className="topbar">
+          <button
+            className="icon-button mobile-menu"
+            type="button"
+            aria-label="Toggle sidebar"
+            onClick={() => setSidebarOpen((value) => !value)}
+          >
+            <Menu size={20} />
           </button>
+          <button
+            className="model-button"
+            type="button"
+            onClick={() => setDetailsOpen(true)}
+            aria-label="Open local model details"
+          >
+            <span>{selectedModel || "Select model"}</span>
+            <ChevronDown size={16} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Open agent details"
+            onClick={() => setDetailsOpen(true)}
+          >
+            <Info size={19} />
+          </button>
+        </header>
+
+        <div className={hasMessages ? "conversation" : "conversation empty"}>
+          {hasMessages ? (
+            <MessageList messages={messages} isSending={isSending} messagesEndRef={messagesEndRef} />
+          ) : (
+            <Welcome onQuickAction={useQuickAction} />
+          )}
         </div>
 
-        <button className="new-chat">
-          <Plus size={20} />
-          New chat
-        </button>
-
-        <div className="search-box">
-          <MessageSquarePlus size={17} />
-          <span>Local sessions coming soon</span>
-        </div>
-
-        <nav className="session-list" aria-label="Local sessions">
-          <p>Today</p>
-          <button className="session active">Initial local chat</button>
-          <button className="session">Plan memory layer</button>
-          <button className="session">Research agent loops</button>
-        </nav>
-
-        <section className="model-picker">
-          <div className="section-title">
-            <span>Models</span>
-            <Settings size={16} />
+        {error ? (
+          <div className="error-banner" role="status">
+            <CircleAlert size={17} />
+            <span>{error}</span>
           </div>
-          <label className="select-label" htmlFor="model-select">
-            Local Ollama model
-          </label>
+        ) : null}
+
+        <form className="composer" onSubmit={sendMessage}>
+          <button className="composer-icon" type="button" aria-label="Attach local context">
+            <Plus size={21} />
+          </button>
+          <textarea
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage(event);
+              }
+            }}
+            placeholder="Ask anything"
+            rows={1}
+          />
           <select
-            id="model-select"
+            className="model-select"
+            aria-label="Select local model"
             value={selectedModel}
             onChange={(event) => setSelectedModel(event.target.value)}
           >
@@ -161,131 +241,169 @@ function App() {
               ))
             )}
           </select>
-        </section>
-
-        <div className="connection">
-          <span className={health?.ollama_connected ? "dot online" : "dot"} />
-          {health?.ollama_connected ? "Ollama connected" : "Ollama offline"}
-        </div>
-      </aside>
-
-      <section className="chat-panel">
-        <header className="chat-header">
-          <div>
-            <h1>Local conversation</h1>
-            <p>{selectedModel || "Select a model"} · private on this device</p>
-          </div>
-          <div className="header-actions">
-            <button className="icon-button" aria-label="Chat options">
-              <SlidersHorizontal size={18} />
-            </button>
-            <button className="icon-button" aria-label="Memory notes">
-              <BookOpen size={18} />
-            </button>
-          </div>
-        </header>
-
-        <div className="messages" aria-live="polite">
-          {messages.map((message, index) => (
-            <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
-              <div className="avatar" aria-hidden="true">
-                {message.role === "user" ? <UserRound size={18} /> : <Bot size={18} />}
-              </div>
-              <div className="bubble">
-                <div className="message-meta">
-                  <strong>{message.role === "user" ? "You" : "Vega"}</strong>
-                  <span>Local</span>
-                </div>
-                <p>{message.content}</p>
-              </div>
-            </article>
-          ))}
-          {isSending && (
-            <article className="message assistant">
-              <div className="avatar" aria-hidden="true">
-                <Bot size={18} />
-              </div>
-              <div className="bubble thinking">
-                <Loader2 size={16} />
-                Thinking locally...
-              </div>
-            </article>
-          )}
-        </div>
-
-        {error && <div className="error-banner">{error}</div>}
-
-        <form className="composer" onSubmit={sendMessage}>
-          <textarea
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder="Ask Vega anything local..."
-            rows={3}
-          />
-          <div className="composer-actions">
-            <button className="icon-button" type="button" aria-label="Attach local context">
-              <Plus size={20} />
-            </button>
-            <button className="icon-button" type="button" aria-label="Voice input">
-              <Mic size={20} />
-            </button>
-            <button className="send-button" disabled={!draft.trim() || !selectedModel || isSending}>
-              {isSending ? <Loader2 size={18} /> : <Send size={18} />}
-              Send
-            </button>
-          </div>
+          <button className="composer-icon" type="button" aria-label="Voice input">
+            <Mic size={19} />
+          </button>
+          <button className="send-button" disabled={!draft.trim() || !selectedModel || isSending} aria-label="Send">
+            {isSending ? <Loader2 size={20} /> : <Send size={19} />}
+          </button>
         </form>
       </section>
 
-      <aside className="inspector">
-        <section className="local-status">
-          <div className="status-heading">
-            <span className={health?.ollama_connected ? "dot online" : "dot"} />
-            <strong>Local</strong>
-          </div>
-          <p>Everything stays on this device.</p>
-        </section>
-
-        <InspectorBlock icon={<Brain size={18} />} title="Memory">
-          <Metric label="Mode" value="Manual soon" />
-          <Metric label="Messages" value={contextCount} />
-          <Metric label="Compaction" value="Planned" />
-        </InspectorBlock>
-
-        <InspectorBlock icon={<Database size={18} />} title="Retrieval">
-          <Metric label="Vector store" value="Planned" />
-          <Metric label="Embeddings" value="Local" />
-          <Metric label="Top K" value="5" />
-        </InspectorBlock>
-
-        <InspectorBlock icon={<Hammer size={18} />} title="Tools">
-          <Metric label="File system" value="Designing" />
-          <Metric label="Shell" value="Human gate" />
-          <Metric label="Skills" value="Future" />
-        </InspectorBlock>
-      </aside>
+      <AgentDetails
+        currentModel={currentModel}
+        health={health}
+        messageCount={messages.length}
+        onClose={() => setDetailsOpen(false)}
+        open={detailsOpen}
+      />
     </main>
   );
 }
 
-function InspectorBlock({ icon, title, children }) {
+function Sidebar({ activeSession, onNewChat, onSelectSession, onToggle, open }) {
   return (
-    <section className="inspector-block">
-      <header>
-        <div>
-          {icon}
-          <strong>{title}</strong>
-        </div>
-        <ChevronDown size={16} />
-      </header>
-      {children}
+    <aside className="sidebar" aria-label="Conversations">
+      <div className="sidebar-brand">
+        <button
+          className="brand-mark"
+          type="button"
+          aria-label={open ? "Vega home" : "Expand sidebar"}
+          onClick={open ? undefined : onToggle}
+        >
+          <Sparkles size={18} />
+        </button>
+        {open ? <strong>Vega Agent</strong> : null}
+        <button className="icon-button sidebar-toggle" type="button" aria-label="Toggle sidebar" onClick={onToggle}>
+          <PanelLeft size={19} />
+        </button>
+      </div>
+
+      <nav className="primary-nav" aria-label="Primary">
+        <button className="nav-item active" type="button" onClick={onNewChat} title="New chat">
+          <MessageSquarePlus size={19} />
+          {open ? <span>New chat</span> : null}
+        </button>
+        <button className="nav-item" type="button" title="Search chats">
+          <Search size={19} />
+          {open ? <span>Search chats</span> : null}
+        </button>
+        <button className="nav-item" type="button" title="Local library">
+          <Database size={19} />
+          {open ? <span>Local library</span> : null}
+        </button>
+        <button className="nav-item" type="button" title="Projects">
+          <Folder size={19} />
+          {open ? <span>Projects</span> : null}
+        </button>
+      </nav>
+
+      {open ? (
+        <section className="session-section">
+          <p>Pinned</p>
+          <button className="session-row" type="button" onClick={() => onSelectSession("Agent roadmap")}>
+            Agent roadmap
+          </button>
+          <p>Recents</p>
+          {sessions.map((session) => (
+            <button
+              className={session === activeSession ? "session-row selected" : "session-row"}
+              key={session}
+              type="button"
+              onClick={() => onSelectSession(session)}
+            >
+              {session}
+            </button>
+          ))}
+        </section>
+      ) : null}
+
+      <div className="profile-dot" aria-label="Local profile">
+        MA
+      </div>
+    </aside>
+  );
+}
+
+function Welcome({ onQuickAction }) {
+  return (
+    <section className="welcome">
+      <h1>Hey, Martin. Ready to build locally?</h1>
+      <div className="quick-actions">
+        {quickActions.map(({ label, icon: Icon }) => (
+          <button type="button" key={label} onClick={() => onQuickAction(label)}>
+            <Icon size={16} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </div>
     </section>
   );
 }
 
-function Metric({ label, value }) {
+function MessageList({ messages, isSending, messagesEndRef }) {
   return (
-    <div className="metric">
+    <div className="message-list" aria-live="polite">
+      {messages.map((message, index) => (
+        <article className={`message ${message.role}`} key={`${message.role}-${index}`}>
+          <div className="message-icon" aria-hidden="true">
+            {message.role === "user" ? <MessageCircle size={18} /> : <Bot size={18} />}
+          </div>
+          <div className="message-content">
+            <strong>{message.role === "user" ? "You" : "Vega"}</strong>
+            <p>{message.content}</p>
+          </div>
+        </article>
+      ))}
+      {isSending ? (
+        <article className="message assistant">
+          <div className="message-icon" aria-hidden="true">
+            <Bot size={18} />
+          </div>
+          <div className="message-content thinking">
+            <Loader2 size={17} />
+            <span>Thinking locally...</span>
+          </div>
+        </article>
+      ) : null}
+      <div ref={messagesEndRef} />
+    </div>
+  );
+}
+
+function AgentDetails({ currentModel, health, messageCount, onClose, open }) {
+  return (
+    <div className={open ? "details-layer open" : "details-layer"} aria-hidden={!open}>
+      <button className="details-backdrop" type="button" aria-label="Close details" onClick={onClose} />
+      <aside className="details-drawer" aria-label="Agent details">
+        <header>
+          <div>
+            <h2>Local agent details</h2>
+            <p>Runtime modules stay private on this device.</p>
+          </div>
+          <button className="icon-button" type="button" aria-label="Close details" onClick={onClose}>
+            <X size={19} />
+          </button>
+        </header>
+
+        <DetailRow
+          icon={health?.ollama_connected ? CheckCircle2 : CircleAlert}
+          label="Ollama"
+          value={health?.ollama_connected ? "Connected" : "Offline"}
+        />
+        <DetailRow icon={Bot} label="Current model" value={currentModel?.name || "None selected"} />
+        <DetailRow icon={MessageSquare} label="Conversation messages" value={String(messageCount)} />
+        <DetailRow icon={Brain} label="Memory" value="Milestone 2" />
+        <DetailRow icon={Wrench} label="Tools" value="Milestone 5" />
+      </aside>
+    </div>
+  );
+}
+
+function DetailRow({ icon: Icon, label, value }) {
+  return (
+    <div className="detail-row">
+      <Icon size={18} />
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
