@@ -22,6 +22,7 @@ class ModelInfo(BaseModel):
     name: str
     size: int | None = None
     modified_at: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
 
 
 class ModelsResponse(BaseModel):

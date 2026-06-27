@@ -20,6 +20,13 @@ app.add_middleware(
 )
 
 
+def choose_default_model(model_names):
+    for model in model_names:
+        if "completion" in model.capabilities or not model.capabilities:
+            return model.name
+    return model_names[0].name if model_names else None
+
+
 @app.get("/api/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
     connected = await ollama_client.health()
@@ -37,7 +44,7 @@ async def models() -> ModelsResponse:
     except OllamaError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    default_model = settings.vega_default_model or (local_models[0].name if local_models else None)
+    default_model = settings.vega_default_model or choose_default_model(local_models)
     return ModelsResponse(models=local_models, default_model=default_model)
 
 

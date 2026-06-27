@@ -34,6 +34,7 @@ class OllamaClient:
                 name=model.get("name", ""),
                 size=model.get("size"),
                 modified_at=model.get("modified_at"),
+                capabilities=model.get("capabilities", []),
             )
             for model in payload.get("models", [])
             if model.get("name")
