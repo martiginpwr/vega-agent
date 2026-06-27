@@ -76,10 +76,18 @@ messages persisted
   -> background memory job
   -> local classifier/extractor
   -> candidate memories with type, confidence, importance, and rationale
-  -> duplicate and conflict check
+  -> optional local embedding duplicate check against similar memories
   -> active or suggested memory record
   -> future retrieval into working context
 ```
+
+The initial implementation is intentionally conservative:
+
+- SQLite stores every conversation and message.
+- `VEGA_MEMORY_MODEL` controls the local Ollama model used for memory classification.
+- If `VEGA_MEMORY_MODEL` is empty, memory jobs are skipped and chat still works.
+- `VEGA_EMBEDDING_MODEL` optionally enables local embedding-based deduplication before storing a candidate.
+- The verifier is currently the classifier plus embedding dedupe path. A second verifier prompt or stronger verifier model should be added only after we collect local eval results showing it is needed.
 
 ## Retrieval Design
 

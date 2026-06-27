@@ -1,13 +1,24 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
+from backend.app.db import database
+from backend.app.memory import classify_memory_for_conversation
 from backend.app.ollama import OllamaError, ollama_client
-from backend.app.schemas import ChatMessage, ChatRequest, ChatResponse, HealthResponse, ModelsResponse
+from backend.app.schemas import (
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    ConversationDetail,
+    ConversationSummary,
+    CreateConversationRequest,
+    HealthResponse,
+    MemoryRecord,
+    ModelsResponse,
+    StoredMessage,
+)
 
-LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant.
-You run through local Ollama models only. Be concise, practical, and transparent about uncertainty.
-Never claim to use cloud services. If a requested capability is not implemented yet, say so briefly."""
+LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant. You are fluent in English and Russian."""
 
 app = FastAPI(title="Vega Agent API", version="0.1.0")
 
@@ -56,8 +67,52 @@ async def models() -> ModelsResponse:
     return ModelsResponse(models=chat_models, default_model=default_model)
 
 
+@app.get("/api/conversations", response_model=list[ConversationSummary])
+async def list_conversations() -> list[ConversationSummary]:
+    return [ConversationSummary(**conversation) for conversation in database.list_conversations()]
+
+
+@app.post("/api/conversations", response_model=ConversationSummary)
+async def create_conversation(request: CreateConversationRequest) -> ConversationSummary:
+    conversation = database.create_conversation(
+        title=request.title or "New chat",
+        selected_model=request.selected_model,
+    )
+    return ConversationSummary(**conversation)
+
+
+@app.get("/api/conversations/{conversation_id}", response_model=ConversationDetail)
+async def get_conversation(conversation_id: str) -> ConversationDetail:
+    try:
+        conversation = database.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from exc
+
+    messages = database.list_messages(conversation_id)
+    return ConversationDetail(
+        conversation=ConversationSummary(**conversation),
+        messages=[StoredMessage(**message) for message in messages],
+    )
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(conversation_id: str) -> dict[str, bool]:
+    try:
+        database.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Conversation not found.") from exc
+
+    database.delete_conversation(conversation_id)
+    return {"ok": True}
+
+
+@app.get("/api/memories", response_model=list[MemoryRecord])
+async def list_memories() -> list[MemoryRecord]:
+    return [MemoryRecord(**memory) for memory in database.list_memories()]
+
+
 @app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest) -> ChatResponse:
+async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     try:
         local_models = await ollama_client.list_models()
     except OllamaError as exc:
@@ -66,6 +121,33 @@ async def chat(request: ChatRequest) -> ChatResponse:
     chat_model_names = {model.name for model in local_models if is_chat_model(model)}
     if request.model not in chat_model_names:
         raise HTTPException(status_code=400, detail="Selected model is not a chat-capable Ollama model.")
+
+    user_messages = [message for message in request.messages if message.role == "user"]
+    if not user_messages:
+        raise HTTPException(status_code=400, detail="At least one user message is required.")
+
+    latest_user_message = user_messages[-1]
+    if request.conversation_id:
+        try:
+            conversation = database.get_conversation(request.conversation_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="Conversation not found.") from exc
+    else:
+        title = latest_user_message.content.strip().replace("\n", " ")
+        conversation = database.create_conversation(
+            title=title[:46] if title else "New chat",
+            selected_model=request.model,
+        )
+
+    conversation_id = conversation["id"]
+    database.update_conversation_model(conversation_id, request.model)
+    user_row = database.add_message(
+        conversation_id=conversation_id,
+        role="user",
+        content=latest_user_message.content,
+        model=request.model,
+    )
+    database.maybe_title_from_message(conversation_id, latest_user_message.content)
 
     messages = request.messages
     if not messages or messages[0].role != "system":
@@ -76,8 +158,24 @@ async def chat(request: ChatRequest) -> ChatResponse:
             model=request.model,
             messages=messages,
             temperature=request.temperature,
+            think=request.think,
         )
     except OllamaError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    return ChatResponse(model=request.model, message=assistant_message)
+    assistant_row = database.add_message(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=assistant_message.content,
+        model=request.model,
+        metadata={"responding_to": user_row["id"]},
+    )
+
+    job_id = database.create_memory_job(conversation_id)
+    background_tasks.add_task(classify_memory_for_conversation, conversation_id, job_id)
+
+    return ChatResponse(
+        model=request.model,
+        message=assistant_message,
+        conversation_id=assistant_row["conversation_id"],
+    )

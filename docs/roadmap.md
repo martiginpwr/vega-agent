@@ -15,17 +15,19 @@ Status: started.
 
 ## Milestone 1: Conversation Persistence
 
-- Store sessions in local SQLite.
-- Add session list, rename, delete, and resume.
-- Keep raw transcripts separate from model context.
+- Store sessions in local SQLite. Status: implemented.
+- Add session list, delete, and resume. Status: implemented.
+- Add rename. Status: planned.
+- Keep raw transcripts separate from model context. Status: implemented.
 - Add export/import for local backups.
 
 ## Milestone 2: Memory
 
-- Add automatic local memory candidate detection.
-- Add local classifier/extractor interface for memory type, confidence, importance, and rationale.
-- Store memories in SQLite with type, source, confidence, and timestamps.
-- Add dedupe and conflict checks before activating memories.
+- Add automatic local memory candidate detection. Status: implemented behind `VEGA_MEMORY_MODEL`.
+- Add local classifier/extractor interface for memory type, confidence, importance, and rationale. Status: implemented.
+- Store memories in SQLite with type, source, confidence, and timestamps. Status: implemented.
+- Add embedding-based dedupe before activating memories. Status: implemented behind `VEGA_EMBEDDING_MODEL`.
+- Add conflict-aware verifier prompt. Status: planned.
 - Add retrieval of relevant memories into chat context.
 - Add user controls for edit/delete/disable memory.
 

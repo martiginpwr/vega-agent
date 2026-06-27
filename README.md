@@ -64,9 +64,16 @@ Copy `.env.example` to `.env` if you want to override defaults.
 ```env
 OLLAMA_BASE_URL=http://127.0.0.1:11434
 VEGA_DEFAULT_MODEL=
+VEGA_DATABASE_PATH=storage/vega.db
+VEGA_MEMORY_MODEL=
+VEGA_EMBEDDING_MODEL=
 ```
 
 If `VEGA_DEFAULT_MODEL` is empty, the app uses the first model returned by Ollama.
+If `VEGA_MEMORY_MODEL` is empty, chat persistence still works but automatic memory
+classification jobs are skipped.
+If `VEGA_EMBEDDING_MODEL` is set, memory candidates are embedded locally and checked
+against similar existing memories before being stored.
 
 ## Documentation
 

@@ -17,6 +17,7 @@ import {
   Search,
   Send,
   Sparkles,
+  Trash2,
   Wrench,
   X,
 } from "lucide-react";
@@ -35,11 +36,15 @@ function App() {
   const [selectedModel, setSelectedModel] = useState("");
   const [health, setHealth] = useState(null);
   const [messages, setMessages] = useState(seedMessages);
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
+  const [isLoadingConversation, setIsLoadingConversation] = useState(false);
   const [error, setError] = useState("");
   const [sidebarOpen, setSidebarOpen] = useState(() => window.innerWidth > 760);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -66,6 +71,7 @@ function App() {
     }
 
     loadStatus();
+    loadConversations();
   }, []);
 
   useEffect(() => {
@@ -87,16 +93,71 @@ function App() {
     [models, selectedModel],
   );
 
+  const supportsThinking = currentModel?.capabilities?.includes("thinking") ?? false;
   const hasMessages = messages.length > 0;
+
+  async function loadConversations() {
+    try {
+      const response = await fetch("/api/conversations");
+      if (!response.ok) {
+        throw new Error("Conversation history is unavailable.");
+      }
+      const data = await response.json();
+      setConversations(data);
+    } catch (err) {
+      setError(err.message);
+    }
+  }
 
   function startNewChat() {
     setMessages([]);
     setDraft("");
     setError("");
+    setActiveConversationId(null);
   }
 
   function useQuickAction(label) {
     setDraft(label);
+  }
+
+  async function openConversation(conversationId) {
+    setIsLoadingConversation(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/conversations/${conversationId}`);
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not open that conversation.");
+      }
+
+      setActiveConversationId(data.conversation.id);
+      setMessages(data.messages.map((message) => ({ role: message.role, content: message.content })));
+      if (data.conversation.selected_model) {
+        setSelectedModel(data.conversation.selected_model);
+      }
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setIsLoadingConversation(false);
+    }
+  }
+
+  async function deleteConversation(conversationId) {
+    setError("");
+    try {
+      const response = await fetch(`/api/conversations/${conversationId}`, { method: "DELETE" });
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || "Could not delete that conversation.");
+      }
+
+      if (activeConversationId === conversationId) {
+        startNewChat();
+      }
+      await loadConversations();
+    } catch (err) {
+      setError(err.message);
+    }
   }
 
   async function sendMessage(event) {
@@ -116,8 +177,10 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           model: selectedModel,
+          conversation_id: activeConversationId,
           messages: nextMessages,
           temperature: 0.7,
+          think: supportsThinking ? thinkingEnabled : null,
         }),
       });
 
@@ -126,7 +189,9 @@ function App() {
         throw new Error(data.detail || "The local model request failed.");
       }
 
+      setActiveConversationId(data.conversation_id);
       setMessages((current) => [...current, data.message]);
+      await loadConversations();
     } catch (err) {
       setError(err.message);
       setMessages((current) => [
@@ -145,6 +210,11 @@ function App() {
   return (
     <main className={sidebarOpen ? "app-shell sidebar-expanded" : "app-shell sidebar-collapsed"}>
       <Sidebar
+        activeConversationId={activeConversationId}
+        conversations={conversations}
+        isLoadingConversation={isLoadingConversation}
+        onDeleteConversation={deleteConversation}
+        onOpenConversation={openConversation}
         onNewChat={startNewChat}
         onToggle={() => setSidebarOpen((value) => !value)}
         open={sidebarOpen}
@@ -194,7 +264,19 @@ function App() {
           </div>
         ) : null}
 
-        <form className="composer" onSubmit={sendMessage}>
+        <form className={supportsThinking ? "composer has-thinking" : "composer"} onSubmit={sendMessage}>
+          {supportsThinking ? (
+            <button
+              className={thinkingEnabled ? "thinking-toggle active" : "thinking-toggle"}
+              type="button"
+              aria-label={thinkingEnabled ? "Disable thinking mode" : "Enable thinking mode"}
+              aria-pressed={thinkingEnabled}
+              onClick={() => setThinkingEnabled((value) => !value)}
+            >
+              <Brain size={18} />
+              <span>{thinkingEnabled ? "Thinking" : "Think"}</span>
+            </button>
+          ) : null}
           <textarea
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
@@ -240,7 +322,16 @@ function App() {
   );
 }
 
-function Sidebar({ onNewChat, onToggle, open }) {
+function Sidebar({
+  activeConversationId,
+  conversations,
+  isLoadingConversation,
+  onDeleteConversation,
+  onNewChat,
+  onOpenConversation,
+  onToggle,
+  open,
+}) {
   return (
     <aside className="sidebar" aria-label="Conversations">
       <div className="sidebar-brand">
@@ -266,8 +357,37 @@ function Sidebar({ onNewChat, onToggle, open }) {
       </nav>
 
       {open ? (
-        <section className="sidebar-note">
-          <p>Conversation history will appear here after SQLite persistence lands.</p>
+        <section className="conversation-section">
+          <p>Recents</p>
+          {conversations.length === 0 ? (
+            <span className="empty-history">No saved chats yet.</span>
+          ) : (
+            conversations.map((conversation) => (
+              <div
+                className={
+                  conversation.id === activeConversationId ? "conversation-row selected" : "conversation-row"
+                }
+                key={conversation.id}
+              >
+                <button
+                  type="button"
+                  onClick={() => onOpenConversation(conversation.id)}
+                  disabled={isLoadingConversation}
+                  title={conversation.title}
+                >
+                  <span>{conversation.title}</span>
+                </button>
+                <button
+                  className="delete-chat"
+                  type="button"
+                  aria-label={`Delete ${conversation.title}`}
+                  onClick={() => onDeleteConversation(conversation.id)}
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            ))
+          )}
         </section>
       ) : null}
 

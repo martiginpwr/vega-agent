@@ -46,6 +46,7 @@ class OllamaClient:
         model: str,
         messages: list[ChatMessage],
         temperature: float,
+        think: bool | None = None,
     ) -> ChatMessage:
         payload = {
             "model": model,
@@ -53,6 +54,8 @@ class OllamaClient:
             "stream": False,
             "options": {"temperature": temperature},
         }
+        if think is not None:
+            payload["think"] = think
 
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -70,6 +73,28 @@ class OllamaClient:
         if not content:
             raise OllamaError("Ollama returned an empty assistant message.")
         return ChatMessage(role="assistant", content=content)
+
+    async def embed(self, *, model: str, text: str) -> list[float]:
+        payload = {"model": model, "input": text}
+
+        try:
+            async with httpx.AsyncClient(timeout=60) as client:
+                response = await client.post(f"{self.base_url}/api/embed", json=payload)
+                response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            raise OllamaError(f"Ollama rejected the embedding request: {detail}") from exc
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"Could not reach Ollama at {self.base_url}") from exc
+
+        data = response.json()
+        embeddings = data.get("embeddings") or []
+        if embeddings and isinstance(embeddings[0], list):
+            return [float(value) for value in embeddings[0]]
+        embedding = data.get("embedding") or []
+        if embedding:
+            return [float(value) for value in embedding]
+        raise OllamaError("Ollama returned no embedding vector.")
 
 
 ollama_client = OllamaClient(settings.ollama_base_url)
