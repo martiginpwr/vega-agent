@@ -77,7 +77,7 @@ messages persisted
   -> local classifier/extractor
   -> candidate memories with type, confidence, importance, and rationale
   -> local grounding verifier against user-authored source messages
-  -> local embedding duplicate check against similar memories
+  -> local embedding retrieval of similar memories
   -> local duplicate/conflict verifier
   -> active or suggested memory record
   -> future retrieval into working context
@@ -92,6 +92,7 @@ The initial implementation is intentionally conservative:
 - `VEGA_EMBEDDING_MODEL` controls local embedding-based memory retrieval and deduplication. It defaults to the local Qwen embedding model.
 - The grounding verifier is intentionally separate from the extractor. The extractor proposes; the grounding verifier rejects unsupported claims, cites exact user quotes, and returns the supported memory content that will be stored.
 - Existing memories without vectors are backfilled before retrieval or duplicate checks.
+- Embedding similarity retrieves likely related memories; the verifier compares their plain text content to decide duplicate, update, merge, conflict, or save-new actions. Only exact normalized text matches are rejected deterministically.
 - Before each chat model call, Vega embeds the latest user message, retrieves the top relevant long-term memories, and injects them as a system context block.
 
 ## Retrieval Design

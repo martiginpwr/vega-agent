@@ -47,6 +47,10 @@ Choose exactly one action:
 Reject low-value or duplicate memories. Prefer concise durable memory over transcript-like notes.
 Do not copy the candidate packet, instructions, schemas, or examples.
 If there are no similar memories and the candidate is a clear durable user preference, choose save_new.
+If similar memories are provided, compare the plain text content, not only similarity scores.
+Use reject_duplicate only when an existing memory already captures the same durable information well.
+Use update_existing or merge_with_existing when the candidate improves, clarifies, or extends an existing memory.
+Use mark_conflict when the candidate contradicts an existing memory.
 
 Output shape:
 {"action":"save_new","confidence":0.95,"reason":"Clear durable memory and no duplicate was found.","target_memory_id":null}
@@ -184,6 +188,10 @@ def looks_like_prompt_echo(value: str) -> bool:
         "reply exactly",
     ]
     return any(marker in lowered for marker in echo_markers)
+
+
+def normalize_memory_text(value: str) -> str:
+    return re.sub(r"\s+", " ", value.strip().lower()).rstrip(".")
 
 
 def fallback_verifier_decision(candidate: dict[str, Any], similar_memories: list[dict[str, Any]]) -> dict[str, Any]:
@@ -473,15 +481,35 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
                 embedding_model=embedding_model,
                 limit=10,
             )
-            if similar_memories and similar_memories[0]["similarity"] >= 0.92:
+            database.add_trace_event(
+                run_id=run_id,
+                step="memory.similar_retrieval",
+                status="completed",
+                message="Retrieved similar memories for verifier review.",
+                metadata={
+                    "count": len(similar_memories),
+                    "top_similarity": similar_memories[0]["similarity"] if similar_memories else None,
+                    "memory_ids": [memory["id"] for memory in similar_memories],
+                },
+            )
+            exact_duplicate = next(
+                (
+                    memory
+                    for memory in similar_memories
+                    if normalize_memory_text(memory["content"]) == normalize_memory_text(content)
+                ),
+                None,
+            )
+            if exact_duplicate:
                 database.add_trace_event(
                     run_id=run_id,
                     step="memory.dedupe",
                     status="completed",
-                    message="Candidate rejected as a near-duplicate by embedding similarity.",
+                    message="Candidate rejected as an exact normalized duplicate.",
                     metadata={
-                        "top_similarity": similar_memories[0]["similarity"],
-                        "memory_id": similar_memories[0]["id"],
+                        "memory_id": exact_duplicate["id"],
+                        "similarity": exact_duplicate.get("similarity"),
+                        "content": exact_duplicate["content"],
                     },
                 )
                 database.complete_memory_job(job_id, status="completed")
@@ -516,6 +544,58 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
             return
 
         status = "active" if (confidence or 0) >= 0.78 and (importance or 0) >= 0.45 else "suggested"
+        target_memory_id = verifier_decision.get("target_memory_id")
+        if verified_action in {"merge_with_existing", "update_existing"} and isinstance(target_memory_id, str):
+            try:
+                updated_memory = database.update_memory(
+                    target_memory_id,
+                    content=content,
+                    confidence=confidence,
+                    importance=importance,
+                    rationale=str(candidate.get("rationale") or ""),
+                    source_message_ids=source_message_ids,
+                    metadata={
+                        "action": action,
+                        "verified_action": verified_action,
+                        "classifier_model": settings.vega_memory_model,
+                        "grounding_model": settings.vega_memory_grounding_model,
+                        "verifier_model": settings.vega_memory_verifier_model,
+                        "embedding_model": embedding_model,
+                        "similar_memory_ids": [memory["id"] for memory in similar_memories],
+                        "grounding": grounding_decision,
+                        "verifier": verifier_decision,
+                    },
+                )
+            except KeyError:
+                database.add_trace_event(
+                    run_id=run_id,
+                    step="memory.verifier",
+                    status="completed",
+                    message="Verifier target memory was missing, so candidate was not stored.",
+                    metadata=verifier_decision,
+                )
+                database.complete_memory_job(job_id, status="completed")
+                return
+
+            if candidate_embedding and embedding_model:
+                database.add_memory_embedding(
+                    memory_id=updated_memory["id"],
+                    embedding_model=embedding_model,
+                    vector=candidate_embedding,
+                )
+            database.add_trace_event(
+                run_id=run_id,
+                step="memory.update",
+                status="completed",
+                message="Updated existing memory from verifier decision.",
+                metadata={
+                    "memory_id": updated_memory["id"],
+                    "action": verified_action,
+                    "type": updated_memory["type"],
+                },
+            )
+            database.complete_memory_job(job_id, status="completed")
+            return
 
         memory = database.add_memory(
             memory_type=str(candidate.get("memory_type") or "fact"),

@@ -409,6 +409,49 @@ class Database:
             raise KeyError(memory_id)
         return row_to_dict(row)
 
+    def update_memory(
+        self,
+        memory_id: str,
+        *,
+        content: str,
+        confidence: float | None,
+        importance: float | None,
+        rationale: str | None,
+        source_message_ids: list[str],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now = utc_now()
+        with self.connect() as connection:
+            row = connection.execute("SELECT metadata_json FROM memories WHERE id = ?", (memory_id,)).fetchone()
+            if row is None:
+                raise KeyError(memory_id)
+            existing_metadata = json.loads(row["metadata_json"] or "{}")
+            existing_metadata.update(metadata or {})
+            connection.execute(
+                """
+                UPDATE memories
+                SET content = ?, confidence = ?, importance = ?, rationale = ?,
+                    updated_at = ?, metadata_json = ?
+                WHERE id = ?
+                """,
+                (
+                    content,
+                    confidence,
+                    importance,
+                    rationale,
+                    now,
+                    json.dumps(existing_metadata),
+                    memory_id,
+                ),
+            )
+            for message_id in source_message_ids:
+                connection.execute(
+                    "INSERT OR IGNORE INTO memory_sources (memory_id, message_id) VALUES (?, ?)",
+                    (memory_id, message_id),
+                )
+            connection.execute("DELETE FROM memory_embeddings WHERE memory_id = ?", (memory_id,))
+        return self.get_memory(memory_id)
+
     def create_memory_job(self, conversation_id: str) -> str:
         job_id = new_id()
         with self.connect() as connection:
