@@ -36,6 +36,14 @@ def is_chat_model(model):
     return "completion" in model.capabilities or not model.capabilities
 
 
+def is_background_only_model(model_name: str) -> bool:
+    background_fragments = {
+        "qwen2.5-0.5b-instruct",
+    }
+    normalized_name = model_name.lower()
+    return any(fragment in normalized_name for fragment in background_fragments)
+
+
 def choose_default_model(models):
     for model in models:
         if "completion" in model.capabilities or not model.capabilities:
@@ -43,13 +51,19 @@ def choose_default_model(models):
     return models[0].name if models else None
 
 
-def is_internal_model(model_name: str) -> bool:
+def is_internal_model(model_name: str, chat_model_names: set[str]) -> bool:
     internal_models = {
         settings.vega_memory_model,
         settings.vega_memory_verifier_model,
     }
     if settings.vega_memory_grounding_model in internal_models:
         internal_models.add(settings.vega_memory_grounding_model)
+    shared_with_chat = {
+        settings.vega_default_model,
+        "qwen3.5:9b",
+        settings.vega_memory_grounding_model,
+    }
+    internal_models -= {model for model in shared_with_chat if model in chat_model_names}
     return model_name in internal_models
 
 
@@ -70,7 +84,16 @@ async def models() -> ModelsResponse:
     except OllamaError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    chat_models = [model for model in local_models if is_chat_model(model) and not is_internal_model(model.name)]
+    chat_model_names = {model.name for model in local_models if is_chat_model(model)}
+    chat_models = [
+        model
+        for model in local_models
+        if (
+            is_chat_model(model)
+            and not is_internal_model(model.name, chat_model_names)
+            and not is_background_only_model(model.name)
+        )
+    ]
     default_model = settings.vega_default_model or choose_default_model(chat_models)
     if default_model and default_model not in {model.name for model in chat_models}:
         default_model = choose_default_model(chat_models)

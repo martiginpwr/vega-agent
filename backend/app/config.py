@@ -1,12 +1,12 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-DEFAULT_MEMORY_MODEL = "hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:latest"
+DEFAULT_MEMORY_MODEL = "qwen3.5:9b"
 DEFAULT_MEMORY_GROUNDING_MODEL = "qwen3.5:9b"
 
 
 class Settings(BaseSettings):
     ollama_base_url: str = "http://127.0.0.1:11434"
-    vega_default_model: str = ""
+    vega_default_model: str = "qwen3.5:9b"
     vega_database_path: str = "storage/vega.db"
     vega_memory_model: str = DEFAULT_MEMORY_MODEL
     vega_memory_grounding_model: str = DEFAULT_MEMORY_GROUNDING_MODEL

@@ -86,9 +86,9 @@ messages persisted
 The initial implementation is intentionally conservative:
 
 - SQLite stores every conversation and message.
-- `VEGA_MEMORY_MODEL` controls the local Ollama model used for memory classification.
+- `VEGA_MEMORY_MODEL` controls the local Ollama model used for memory classification. This defaults to the stronger local chat model because the 0.5B extractor produced too many hallucinated candidates.
 - `VEGA_MEMORY_GROUNDING_MODEL` controls the local Ollama model used to verify that a candidate is supported by user-authored messages. This defaults to the stronger local chat model because false memory writes are more expensive than extra latency.
-- `VEGA_MEMORY_VERIFIER_MODEL` controls the local Ollama model used for duplicate, conflict, and final save/reject decisions.
+- `VEGA_MEMORY_VERIFIER_MODEL` controls the local Ollama model used for duplicate, conflict, and final save/reject decisions. This also defaults to the stronger local chat model for now.
 - `VEGA_EMBEDDING_MODEL` optionally enables local embedding-based deduplication before storing a candidate.
 - The grounding verifier is intentionally separate from the extractor. The extractor proposes; the grounding verifier rejects unsupported claims, cites exact user quotes, and returns the supported memory content that will be stored.
 

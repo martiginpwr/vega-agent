@@ -58,6 +58,7 @@ Accept only if the candidate is directly supported by user-authored evidence or 
 Reject if the candidate adds unsupported details, generalizes from the assistant's response, or turns a casual message into a preference.
 Use only ids from source_messages as evidence_message_ids.
 For grounded=true, include evidence_quotes copied exactly from user-authored source_messages.
+Do not wrap evidence_quotes in extra quotation marks. The JSON string quoting is enough.
 If no exact user quote supports the candidate, return grounded=false.
 For grounded=true, set supported_memory_content to the concise memory text supported by the evidence.
 If the candidate contains unsupported extra details, remove them from supported_memory_content and list them in unsupported_claims.
@@ -80,7 +81,7 @@ Keep reason short. Do not put quotation marks inside reason.
 GROUNDING_RETRY_PROMPT = """Return one valid minified JSON object for memory grounding.
 Required keys: grounded, confidence, supported_memory_content, evidence_message_ids, evidence_quotes, unsupported_claims, reason.
 Do not include markdown. Do not include quotation marks inside reason.
-Only evidence_quotes may copy exact user text.
+Only evidence_quotes may copy exact user text. Do not add extra quotation marks inside evidence_quotes.
 """
 
 
