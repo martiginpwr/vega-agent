@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.config import settings
 from backend.app.db import database
-from backend.app.memory import classify_memory_for_conversation
+from backend.app.memory import build_memory_context_message, classify_memory_for_conversation, retrieve_relevant_memories
 from backend.app.ollama import OllamaError, ollama_client
 from backend.app.schemas import (
     ChatMessage,
@@ -214,9 +214,27 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
     )
     database.maybe_title_from_message(conversation_id, latest_user_message.content)
 
+    retrieved_memories = []
+    try:
+        retrieved_memories = await retrieve_relevant_memories(
+            query=latest_user_message.content,
+            run_id=run_id,
+        )
+    except OllamaError as exc:
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.retrieve",
+            status="failed",
+            message="Memory retrieval failed; continuing chat without retrieved memory.",
+            metadata={"error": str(exc)},
+        )
+
     messages = request.messages
+    memory_context_message = build_memory_context_message(retrieved_memories)
     if not messages or messages[0].role != "system":
         messages = [ChatMessage(role="system", content=LOCAL_SYSTEM_PROMPT), *messages]
+    if memory_context_message:
+        messages = [messages[0], memory_context_message, *messages[1:]]
 
     try:
         database.add_trace_event(

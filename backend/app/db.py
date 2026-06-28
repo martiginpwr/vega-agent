@@ -291,6 +291,32 @@ class Database:
             ).fetchall()
         return [row_to_dict(row) for row in rows]
 
+    def list_memories_missing_embedding(self, *, embedding_model: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT m.*
+                FROM memories m
+                LEFT JOIN memory_embeddings e
+                    ON e.memory_id = m.id AND e.embedding_model = ?
+                WHERE m.status IN ('active', 'suggested') AND e.memory_id IS NULL
+                ORDER BY m.updated_at DESC
+                LIMIT ?
+                """,
+                (embedding_model, limit),
+            ).fetchall()
+        return [row_to_dict(row) for row in rows]
+
+    def mark_memories_used(self, memory_ids: list[str]) -> None:
+        if not memory_ids:
+            return
+        placeholders = ",".join("?" for _ in memory_ids)
+        with self.connect() as connection:
+            connection.execute(
+                f"UPDATE memories SET last_used_at = ? WHERE id IN ({placeholders})",
+                (utc_now(), *memory_ids),
+            )
+
     def add_memory_embedding(self, *, memory_id: str, embedding_model: str, vector: list[float]) -> None:
         with self.connect() as connection:
             connection.execute(

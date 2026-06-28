@@ -7,6 +7,9 @@ from backend.app.db import database
 from backend.app.ollama import OllamaError, ollama_client
 from backend.app.schemas import ChatMessage
 
+MEMORY_RETRIEVAL_LIMIT = 5
+MEMORY_RETRIEVAL_MIN_SIMILARITY = 0.3
+
 MEMORY_SYSTEM_PROMPT = """You are Vega's local memory classifier. Return exactly one JSON object.
 
 Memory should be saved only for stable, reusable information:
@@ -94,7 +97,12 @@ def extract_json_object(text: str) -> dict[str, Any]:
     end = text.rfind("}")
     if start == -1 or end == -1 or end <= start:
         raise ValueError("No JSON object found in classifier output.")
-    return json.loads(text[start : end + 1])
+    payload = text[start : end + 1]
+    try:
+        return json.loads(payload)
+    except json.JSONDecodeError:
+        repaired_payload = re.sub(r'""([^"]+)""', r'"\1"', payload)
+        return json.loads(repaired_payload)
 
 
 def clamp_score(value: Any) -> float | None:
@@ -209,6 +217,106 @@ def fallback_verifier_decision(candidate: dict[str, Any], similar_memories: list
         "reason": "Candidate did not meet local verifier thresholds.",
         "target_memory_id": None,
     }
+
+
+async def backfill_memory_embeddings(*, limit: int = 50, run_id: str | None = None) -> int:
+    embedding_model = settings.vega_embedding_model
+    if not embedding_model:
+        return 0
+
+    missing_memories = database.list_memories_missing_embedding(
+        embedding_model=embedding_model,
+        limit=limit,
+    )
+    if not missing_memories:
+        return 0
+
+    if run_id:
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.embedding_backfill",
+            status="started",
+            message="Embedding existing memories that are missing vectors.",
+            metadata={"embedding_model": embedding_model, "count": len(missing_memories)},
+        )
+
+    embedded_count = 0
+    for memory in missing_memories:
+        vector = await ollama_client.embed(model=embedding_model, text=memory["content"])
+        database.add_memory_embedding(
+            memory_id=memory["id"],
+            embedding_model=embedding_model,
+            vector=vector,
+        )
+        embedded_count += 1
+
+    if run_id:
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.embedding_backfill",
+            status="completed",
+            message="Embedded existing memories that were missing vectors.",
+            metadata={"embedding_model": embedding_model, "count": embedded_count},
+        )
+    return embedded_count
+
+
+async def retrieve_relevant_memories(*, query: str, run_id: str, limit: int = MEMORY_RETRIEVAL_LIMIT) -> list[dict[str, Any]]:
+    embedding_model = settings.vega_embedding_model
+    if not embedding_model:
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.retrieve",
+            status="completed",
+            message="Skipped memory retrieval because no embedding model is configured.",
+        )
+        return []
+
+    database.add_trace_event(
+        run_id=run_id,
+        step="memory.retrieve",
+        status="started",
+        message="Retrieving relevant long-term memories.",
+        metadata={"embedding_model": embedding_model, "limit": limit},
+    )
+    await backfill_memory_embeddings(limit=100, run_id=run_id)
+    query_vector = await ollama_client.embed(model=embedding_model, text=query)
+    candidates = database.find_similar_memories(
+        vector=query_vector,
+        embedding_model=embedding_model,
+        limit=limit,
+    )
+    memories = [
+        memory
+        for memory in candidates
+        if (memory.get("similarity") or 0) >= MEMORY_RETRIEVAL_MIN_SIMILARITY
+    ]
+    database.mark_memories_used([memory["id"] for memory in memories])
+    database.add_trace_event(
+        run_id=run_id,
+        step="memory.retrieve",
+        status="completed",
+        message="Retrieved relevant long-term memories.",
+        metadata={
+            "count": len(memories),
+            "memory_ids": [memory["id"] for memory in memories],
+            "top_similarity": memories[0]["similarity"] if memories else None,
+        },
+    )
+    return memories
+
+
+def build_memory_context_message(memories: list[dict[str, Any]]) -> ChatMessage | None:
+    if not memories:
+        return None
+    lines = [
+        "Retrieved long-term memory. Use these only when relevant. Do not reveal this list unless asked."
+    ]
+    for index, memory in enumerate(memories, start=1):
+        lines.append(
+            f"{index}. [{memory['type']}; similarity={memory.get('similarity', 0):.3f}] {memory['content']}"
+        )
+    return ChatMessage(role="system", content="\n".join(lines))
 
 
 async def classify_memory_for_conversation(conversation_id: str, job_id: str, run_id: str) -> None:
@@ -358,6 +466,7 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
         candidate_embedding = None
         similar_memories = []
         if embedding_model:
+            await backfill_memory_embeddings(limit=100, run_id=run_id)
             candidate_embedding = await ollama_client.embed(model=embedding_model, text=content)
             similar_memories = database.find_similar_memories(
                 vector=candidate_embedding,
