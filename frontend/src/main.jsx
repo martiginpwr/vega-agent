@@ -196,6 +196,7 @@ function App() {
     if (!content || !selectedModel || isSending) return;
 
     const temporaryUserId = `pending-${Date.now()}`;
+    const temporaryAssistantId = `pending-assistant-${Date.now()}`;
     const nextMessages = [...messages, { id: temporaryUserId, role: "user", content, metadata: {} }];
     setMessages(nextMessages);
     setDraft("");
@@ -203,7 +204,7 @@ function App() {
     setError("");
 
     try {
-      const response = await fetch("/api/chat", {
+      const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -215,34 +216,97 @@ function App() {
         }),
       });
 
-      const data = await response.json();
       if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
         throw new Error(data.detail || "The local model request failed.");
       }
+      if (!response.body) {
+        throw new Error("The local streaming response is unavailable.");
+      }
 
-      setActiveConversationId(data.conversation_id);
-      setMessages((current) => [
-        ...current.map((message) =>
-          message.id === temporaryUserId
-            ? {
-                ...message,
-                id: data.user_message_id,
-                metadata: { ...message.metadata, run_id: data.run_id },
-              }
-            : message,
-        ),
-        {
-          id: data.assistant_message_id,
-          role: data.message.role,
-          content: data.message.content,
-          metadata: { run_id: data.run_id },
-        },
-      ]);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let streamRunId = null;
+      let assistantStarted = false;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const data = JSON.parse(line);
+          if (data.event === "error") {
+            throw new Error(data.error || "The local model request failed.");
+          }
+          if (data.event === "start") {
+            streamRunId = data.run_id;
+            setActiveConversationId(data.conversation_id);
+            setMessages((current) => [
+              ...current.map((message) =>
+                message.id === temporaryUserId
+                  ? {
+                      ...message,
+                      id: data.user_message_id,
+                      metadata: { ...message.metadata, run_id: data.run_id },
+                    }
+                  : message,
+              ),
+              {
+                id: temporaryAssistantId,
+                role: "assistant",
+                content: "",
+                metadata: { run_id: data.run_id },
+              },
+            ]);
+            assistantStarted = true;
+          }
+          if (data.event === "delta") {
+            if (!assistantStarted) {
+              setMessages((current) => [
+                ...current,
+                {
+                  id: temporaryAssistantId,
+                  role: "assistant",
+                  content: "",
+                  metadata: streamRunId ? { run_id: streamRunId } : {},
+                },
+              ]);
+              assistantStarted = true;
+            }
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === temporaryAssistantId
+                  ? { ...message, content: `${message.content}${data.content || ""}` }
+                  : message,
+              ),
+            );
+          }
+          if (data.event === "done") {
+            setActiveConversationId(data.conversation_id);
+            setMessages((current) =>
+              current.map((message) =>
+                message.id === temporaryAssistantId
+                  ? {
+                      ...message,
+                      id: data.assistant_message_id,
+                      metadata: { ...message.metadata, run_id: data.run_id },
+                    }
+                  : message,
+              ),
+            );
+          }
+        }
+      }
       await loadConversations();
     } catch (err) {
       setError(err.message);
       setMessages((current) => [
-        ...current,
+        ...current.filter((message) => message.id !== temporaryAssistantId),
         {
           role: "assistant",
           content:
@@ -380,6 +444,67 @@ function App() {
   );
 }
 
+function renderInlineMarkdown(text) {
+  const parts = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*)/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    if (token.startsWith("`")) {
+      parts.push(<code key={`${match.index}-code`}>{token.slice(1, -1)}</code>);
+    } else {
+      parts.push(<strong key={`${match.index}-strong`}>{token.slice(2, -2)}</strong>);
+    }
+    lastIndex = match.index + token.length;
+  }
+
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts;
+}
+
+function MarkdownContent({ content }) {
+  const blocks = content.split(/```/);
+  return (
+    <div className="markdown-content">
+      {blocks.map((block, blockIndex) => {
+        if (blockIndex % 2 === 1) {
+          const lines = block.replace(/^\w+\n/, "");
+          return <pre key={`code-${blockIndex}`}><code>{lines.trimEnd()}</code></pre>;
+        }
+
+        return block
+          .split(/\n{2,}/)
+          .filter((section) => section.trim())
+          .map((section, sectionIndex) => {
+            const key = `text-${blockIndex}-${sectionIndex}`;
+            const trimmed = section.trim();
+            if (/^#{1,3}\s/.test(trimmed)) {
+              return <h3 key={key}>{renderInlineMarkdown(trimmed.replace(/^#{1,3}\s/, ""))}</h3>;
+            }
+            const listLines = trimmed.split("\n").filter((line) => /^[-*]\s+/.test(line.trim()));
+            if (listLines.length && listLines.length === trimmed.split("\n").length) {
+              return (
+                <ul key={key}>
+                  {listLines.map((line, index) => (
+                    <li key={`${key}-${index}`}>{renderInlineMarkdown(line.trim().replace(/^[-*]\s+/, ""))}</li>
+                  ))}
+                </ul>
+              );
+            }
+            return <p key={key}>{renderInlineMarkdown(trimmed)}</p>;
+          });
+      })}
+    </div>
+  );
+}
+
 function Sidebar({
   activeConversationId,
   conversations,
@@ -473,6 +598,9 @@ function Welcome({ onQuickAction }) {
 }
 
 function MessageList({ messages, isSending, messagesEndRef, onOpenTrace }) {
+  const lastMessage = messages[messages.length - 1];
+  const showThinking = isSending && !(lastMessage?.role === "assistant" && lastMessage.content);
+
   return (
     <div className="message-list" aria-live="polite">
       {messages.map((message, index) => (
@@ -486,11 +614,11 @@ function MessageList({ messages, isSending, messagesEndRef, onOpenTrace }) {
           </div>
           <div className="message-content">
             <strong>{message.role === "user" ? "You" : "Vega"}</strong>
-            <p>{message.content}</p>
+            <MarkdownContent content={message.content} />
           </div>
         </article>
       ))}
-      {isSending ? (
+      {showThinking ? (
         <article className="message assistant">
           <div className="message-icon" aria-hidden="true">
             <Bot size={18} />

@@ -1,5 +1,9 @@
+import asyncio
+import json
+
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from backend.app.config import settings
 from backend.app.db import database
@@ -30,6 +34,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def stream_event(event: str, payload: dict) -> str:
+    return json.dumps({"event": event, **payload}) + "\n"
 
 
 def is_chat_model(model):
@@ -312,3 +320,205 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         user_message_id=user_row["id"],
         assistant_message_id=assistant_row["id"],
     )
+
+
+@app.post("/api/chat/stream")
+async def stream_chat(request: ChatRequest) -> StreamingResponse:
+    async def event_stream():
+        try:
+            local_models = await ollama_client.list_models()
+        except OllamaError as exc:
+            yield stream_event("error", {"error": str(exc)})
+            return
+
+        chat_model_names = {model.name for model in local_models if is_chat_model(model)}
+        if request.model not in chat_model_names:
+            yield stream_event("error", {"error": "Selected model is not a chat-capable Ollama model."})
+            return
+
+        user_messages = [message for message in request.messages if message.role == "user"]
+        if not user_messages:
+            yield stream_event("error", {"error": "At least one user message is required."})
+            return
+
+        latest_user_message = user_messages[-1]
+        if request.conversation_id:
+            try:
+                conversation = database.get_conversation(request.conversation_id)
+            except KeyError:
+                yield stream_event("error", {"error": "Conversation not found."})
+                return
+        else:
+            title = latest_user_message.content.strip().replace("\n", " ")
+            conversation = database.create_conversation(
+                title=title[:46] if title else "New chat",
+                selected_model=request.model,
+            )
+
+        conversation_id = conversation["id"]
+        run = database.create_agent_run(conversation_id=conversation_id, model=request.model)
+        run_id = run["id"]
+        database.add_trace_event(
+            run_id=run_id,
+            step="chat.start",
+            status="completed",
+            message="Started local streaming chat run.",
+            metadata={
+                "model": request.model,
+                "conversation_id": conversation_id,
+                "think": request.think,
+                "stream": True,
+            },
+        )
+        database.update_conversation_model(conversation_id, request.model)
+        user_row = database.add_message(
+            conversation_id=conversation_id,
+            role="user",
+            content=latest_user_message.content,
+            model=request.model,
+            metadata={"run_id": run_id},
+        )
+        database.update_agent_run(run_id, status="started", user_message_id=user_row["id"])
+        database.add_trace_event(
+            run_id=run_id,
+            step="chat.persist_user",
+            status="completed",
+            message="Saved user message to SQLite.",
+            metadata={"message_id": user_row["id"]},
+        )
+        database.maybe_title_from_message(conversation_id, latest_user_message.content)
+
+        yield stream_event(
+            "start",
+            {
+                "conversation_id": conversation_id,
+                "run_id": run_id,
+                "user_message_id": user_row["id"],
+            },
+        )
+
+        retrieved_memories = []
+        try:
+            retrieved_memories = await retrieve_relevant_memories(
+                query=latest_user_message.content,
+                run_id=run_id,
+            )
+        except OllamaError as exc:
+            database.add_trace_event(
+                run_id=run_id,
+                step="memory.retrieve",
+                status="failed",
+                message="Memory retrieval failed; continuing chat without retrieved memory.",
+                metadata={"error": str(exc)},
+            )
+
+        messages = request.messages
+        memory_context_message = build_memory_context_message(retrieved_memories)
+        if not messages or messages[0].role != "system":
+            messages = [ChatMessage(role="system", content=LOCAL_SYSTEM_PROMPT), *messages]
+        if memory_context_message:
+            messages = [messages[0], memory_context_message, *messages[1:]]
+
+        content_parts = []
+        try:
+            database.add_trace_event(
+                run_id=run_id,
+                step="model.chat",
+                status="started",
+                message="Streaming conversation context to local Ollama chat model.",
+                metadata={"message_count": len(messages), "model": request.model},
+            )
+            async for line in ollama_client.stream_chat(
+                model=request.model,
+                messages=messages,
+                temperature=request.temperature,
+                think=request.think,
+            ):
+                data = json.loads(line)
+                message = data.get("message") or {}
+                delta = message.get("content") or ""
+                if delta:
+                    content_parts.append(delta)
+                    yield stream_event("delta", {"content": delta})
+                if data.get("done"):
+                    break
+        except (OllamaError, json.JSONDecodeError) as exc:
+            database.add_trace_event(
+                run_id=run_id,
+                step="model.chat",
+                status="failed",
+                message="Local Ollama streaming chat request failed.",
+                metadata={"error": str(exc)},
+            )
+            database.update_agent_run(run_id, status="failed", error=str(exc))
+            yield stream_event("error", {"error": str(exc), "run_id": run_id})
+            return
+
+        assistant_content = "".join(content_parts).strip()
+        if not assistant_content:
+            error = "Ollama returned an empty streamed assistant message."
+            database.add_trace_event(
+                run_id=run_id,
+                step="model.chat",
+                status="failed",
+                message="Local Ollama streaming chat returned empty content.",
+                metadata={"error": error},
+            )
+            database.update_agent_run(run_id, status="failed", error=error)
+            yield stream_event("error", {"error": error, "run_id": run_id})
+            return
+
+        database.add_trace_event(
+            run_id=run_id,
+            step="model.chat",
+            status="completed",
+            message="Received streamed assistant response from local Ollama chat model.",
+            metadata={"response_chars": len(assistant_content)},
+        )
+        assistant_row = database.add_message(
+            conversation_id=conversation_id,
+            role="assistant",
+            content=assistant_content,
+            model=request.model,
+            metadata={"responding_to": user_row["id"], "run_id": run_id},
+        )
+        database.update_agent_run(
+            run_id,
+            status="completed",
+            assistant_message_id=assistant_row["id"],
+        )
+        database.add_trace_event(
+            run_id=run_id,
+            step="chat.persist_assistant",
+            status="completed",
+            message="Saved streamed assistant response to SQLite.",
+            metadata={"message_id": assistant_row["id"]},
+        )
+        job_id = database.create_memory_job(conversation_id)
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.queue",
+            status="completed",
+            message="Queued automatic memory extraction and verification job.",
+            metadata={
+                "job_id": job_id,
+                "classifier_model": settings.vega_memory_model,
+                "grounding_model": settings.vega_memory_grounding_model,
+                "verifier_model": settings.vega_memory_verifier_model,
+                "embedding_model": settings.vega_embedding_model,
+            },
+        )
+        asyncio.create_task(classify_memory_for_conversation(conversation_id, job_id, run_id))
+
+        yield stream_event(
+            "done",
+            {
+                "model": request.model,
+                "conversation_id": conversation_id,
+                "run_id": run_id,
+                "user_message_id": user_row["id"],
+                "assistant_message_id": assistant_row["id"],
+            },
+        )
+
+    return StreamingResponse(event_stream(), media_type="application/x-ndjson")

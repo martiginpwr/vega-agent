@@ -77,6 +77,38 @@ class OllamaClient:
             raise OllamaError("Ollama returned an empty assistant message.")
         return ChatMessage(role="assistant", content=content)
 
+    async def stream_chat(
+        self,
+        *,
+        model: str,
+        messages: list[ChatMessage],
+        temperature: float,
+        think: bool | None = None,
+    ):
+        payload = {
+            "model": model,
+            "messages": [message.model_dump() for message in messages],
+            "stream": True,
+            "options": {"temperature": temperature},
+        }
+        if think is not None:
+            payload["think"] = think
+
+        try:
+            timeout = httpx.Timeout(300, read=None)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if not line:
+                            continue
+                        yield line
+        except httpx.HTTPStatusError as exc:
+            detail = exc.response.text[:500]
+            raise OllamaError(f"Ollama rejected the streaming chat request: {detail}") from exc
+        except httpx.HTTPError as exc:
+            raise OllamaError(f"Could not reach Ollama at {self.base_url}") from exc
+
     async def embed(self, *, model: str, text: str) -> list[float]:
         payload = {"model": model, "input": text}
 

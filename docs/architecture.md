@@ -23,6 +23,9 @@ The backend currently exposes:
 - `GET /api/health`: checks whether Ollama is reachable.
 - `GET /api/models`: returns locally installed Ollama models.
 - `POST /api/chat`: sends a conversation to the selected Ollama model.
+- `POST /api/chat/stream`: streams local Ollama tokens to the browser while preserving the same SQLite persistence, traces, memory retrieval, and background memory extraction flow.
+
+The browser uses the streaming chat endpoint for the interactive UI. Stream events include run metadata, token deltas, completion metadata, and errors. Markdown-like model output is rendered locally in React without calling external services.
 
 ## Planned Agent Runtime
 
