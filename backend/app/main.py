@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -18,12 +18,21 @@ from backend.app.schemas import (
     CreateConversationRequest,
     HealthResponse,
     MemoryRecord,
+    MemoryTypeSummary,
     ModelsResponse,
     StoredMessage,
     TraceResponse,
 )
 
-LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant. You are fluent in English and Russian."""
+LOCAL_SYSTEM_PROMPT = """You are Vega Agent, a private local-first personal AI assistant.
+
+Behavior:
+- Reply in the user's language. If the user writes in English, reply in English. If the user writes in Russian, reply in Russian. If the user mixes languages, use the language that best matches the user's current request.
+- Do not answer in multiple languages unless the user explicitly asks for translation, language comparison, or bilingual output.
+- Do not use emojis.
+- Be calm, grounded, logical, and friendly.
+- Avoid exaggerated enthusiasm, hype, or overly excited phrasing.
+- Keep answers practical and clear."""
 
 app = FastAPI(title="Vega Agent API", version="0.1.0")
 
@@ -149,8 +158,16 @@ async def delete_conversation(conversation_id: str) -> dict[str, bool]:
 
 
 @app.get("/api/memories", response_model=list[MemoryRecord])
-async def list_memories() -> list[MemoryRecord]:
-    return [MemoryRecord(**memory) for memory in database.list_memories()]
+async def list_memories(
+    types: list[str] | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+) -> list[MemoryRecord]:
+    return [MemoryRecord(**memory) for memory in database.list_memories(types=types, limit=limit)]
+
+
+@app.get("/api/memories/types", response_model=list[MemoryTypeSummary])
+async def list_memory_types() -> list[MemoryTypeSummary]:
+    return [MemoryTypeSummary(**memory_type) for memory_type in database.list_memory_types()]
 
 
 @app.get("/api/traces/{run_id}", response_model=TraceResponse)

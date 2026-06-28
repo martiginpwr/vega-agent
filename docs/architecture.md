@@ -140,6 +140,14 @@ Tools should be registered with typed schemas and permission metadata:
 
 The first tool layer should support read-only local knowledge tools before adding file writes or shell execution.
 
+Initial memory inspection tool:
+
+1. `list_memory_types`: returns active memory categories and counts, such as `preference`, `project_constraint`, or `skill_candidate`.
+2. The assistant asks the user which category or categories they want to inspect when the request is broad.
+3. `retrieve_memories`: returns existing active memories filtered by selected type and bounded by a limit.
+
+This avoids dumping the whole memory table into context. Embeddings remain the right retrieval path for answering normal chats, but explicit memory inspection should use structured filters so the user can audit what Vega has stored.
+
 ## Skill Creation
 
 The Hermes-style skill idea should be implemented as a review pipeline:

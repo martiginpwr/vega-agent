@@ -83,6 +83,11 @@ class MemoryRecord(BaseModel):
     created_at: str
 
 
+class MemoryTypeSummary(BaseModel):
+    type: str
+    count: int
+
+
 class TraceEvent(BaseModel):
     id: str
     run_id: str

@@ -278,16 +278,39 @@ class Database:
             ).fetchall()
         return list(reversed([row_to_dict(row) for row in rows]))
 
-    def list_memories(self, limit: int = 100) -> list[dict[str, Any]]:
+    def list_memories(self, *, types: list[str] | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        parameters: list[Any] = []
+        type_filter = ""
+        if types:
+            clean_types = [memory_type.strip() for memory_type in types if memory_type.strip()]
+            if clean_types:
+                placeholders = ",".join("?" for _ in clean_types)
+                type_filter = f" AND type IN ({placeholders})"
+                parameters.extend(clean_types)
+        parameters.append(limit)
         with self.connect() as connection:
             rows = connection.execute(
-                """
+                f"""
                 SELECT * FROM memories
                 WHERE status IN ('active', 'suggested')
+                {type_filter}
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,
-                (limit,),
+                parameters,
+            ).fetchall()
+        return [row_to_dict(row) for row in rows]
+
+    def list_memory_types(self) -> list[dict[str, Any]]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT type, COUNT(*) AS count
+                FROM memories
+                WHERE status IN ('active', 'suggested')
+                GROUP BY type
+                ORDER BY count DESC, type ASC
+                """
             ).fetchall()
         return [row_to_dict(row) for row in rows]
 
