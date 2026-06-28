@@ -704,7 +704,15 @@ button {
 }
 
 .trace-summary strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   color: #fff;
+}
+
+.trace-live svg,
+.trace-event.status-started span svg {
+  animation: spin 1s linear infinite;
 }
 
 .trace-events {
@@ -724,6 +732,14 @@ button {
   background: #151515;
 }
 
+.trace-event.status-started {
+  border-color: #3a3a3a;
+}
+
+.trace-event.status-failed {
+  border-color: #573131;
+}
+
 .trace-event div {
   display: flex;
   align-items: baseline;
@@ -736,6 +752,9 @@ button {
 }
 
 .trace-event span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   color: #aaa;
   font-size: 12px;
 }

@@ -99,6 +99,24 @@ function App() {
   const supportsThinking = currentModel?.capabilities?.includes("thinking") ?? false;
   const hasMessages = messages.length > 0;
 
+  useEffect(() => {
+    if (!traceOpen || !trace?.run?.id || !hasActiveTraceProcessing(trace)) return undefined;
+
+    const intervalId = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/traces/${trace.run.id}`);
+        const data = await response.json();
+        if (response.ok) {
+          setTrace(data);
+        }
+      } catch {
+        // Keep the existing trace visible. The next poll can recover if this was transient.
+      }
+    }, 1500);
+
+    return () => window.clearInterval(intervalId);
+  }, [traceOpen, trace]);
+
   async function loadConversations() {
     try {
       const response = await fetch("/api/conversations");
@@ -505,6 +523,43 @@ function MarkdownContent({ content }) {
   );
 }
 
+function hasActiveTraceProcessing(trace) {
+  if (!trace) return false;
+  if (trace.run?.status === "failed") return false;
+  if (trace.run?.status === "started") return true;
+  if (!trace.events?.length) return false;
+
+  const lastStatusByStep = new Map();
+  for (const event of trace.events) {
+    lastStatusByStep.set(event.step, event.status);
+  }
+
+  const hasStartedStep = [...lastStatusByStep.values()].some((status) => status === "started");
+  if (hasStartedStep) return true;
+
+  const hasMemoryQueue = trace.events.some((event) => event.step === "memory.queue");
+  if (!hasMemoryQueue) return false;
+
+  return !trace.events.some((event) => {
+    if (event.step === "memory.write" || event.step === "memory.update" || event.step === "memory.dedupe") {
+      return event.status === "completed";
+    }
+    if (event.step === "memory.error") {
+      return event.status === "failed";
+    }
+    if (event.step === "memory.classifier" && event.message.includes("no durable memory")) {
+      return event.status === "completed";
+    }
+    if (event.step === "memory.grounding" && event.message.includes("rejected")) {
+      return event.status === "completed";
+    }
+    if (event.step === "memory.verifier" && event.message.includes("rejected")) {
+      return event.status === "completed";
+    }
+    return false;
+  });
+}
+
 function Sidebar({
   activeConversationId,
   conversations,
@@ -664,6 +719,8 @@ function AgentDetails({ currentModel, health, messageCount, onClose, open }) {
 }
 
 function TraceDrawer({ isLoading, onClose, open, trace }) {
+  const isProcessing = hasActiveTraceProcessing(trace);
+
   return (
     <div className={open ? "details-layer open trace-layer" : "details-layer trace-layer"} aria-hidden={!open}>
       <button className="details-backdrop" type="button" aria-label="Close trace" onClick={onClose} />
@@ -687,14 +744,26 @@ function TraceDrawer({ isLoading, onClose, open, trace }) {
           <>
             <div className="trace-summary">
               <span>Run</span>
-              <strong>{trace.run.status}</strong>
+              <strong className={isProcessing ? "trace-live" : ""}>
+                {isProcessing ? (
+                  <>
+                    <Loader2 size={13} />
+                    Processing
+                  </>
+                ) : (
+                  trace.run.status
+                )}
+              </strong>
             </div>
             <div className="trace-events">
               {trace.events.map((event) => (
-                <article className="trace-event" key={event.id}>
+                <article className={`trace-event status-${event.status}`} key={event.id}>
                   <div>
                     <strong>{event.step}</strong>
-                    <span>{event.status}</span>
+                    <span>
+                      {event.status === "started" ? <Loader2 size={12} /> : null}
+                      {event.status}
+                    </span>
                   </div>
                   <p>{event.message}</p>
                   {Object.keys(event.metadata || {}).length > 0 ? (
