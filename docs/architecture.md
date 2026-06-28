@@ -55,7 +55,7 @@ Vega should use three different concepts instead of one overloaded memory bucket
 
 Memory creation should be automatic and classifier-driven. The system should not use simple keyword rules as the primary signal because natural conversations are too creative and varied. After each conversation turn is saved, a background local classifier/extractor should decide whether the exchange contains memory-worthy information, what type of memory it is, and how confident the system should be.
 
-The first implementation can use the currently selected local chat model for structured extraction. The architecture should still isolate this behind a memory-classifier interface so it can later move to a smaller local model without changing storage or retrieval code.
+The implementation isolates memory decisions behind local model roles instead of using the main chat model for every background judgment. The same small local model can serve multiple roles at first, but each role has a separate prompt and trace step so it can be replaced independently later.
 
 Memory storage should include provenance: when it was created, from which session, which messages caused it, why it was considered useful, and when it was last used. This makes deletion, inspection, correction, deduplication, and conflict handling possible.
 
@@ -76,7 +76,9 @@ messages persisted
   -> background memory job
   -> local classifier/extractor
   -> candidate memories with type, confidence, importance, and rationale
+  -> local grounding verifier against user-authored source messages
   -> optional local embedding duplicate check against similar memories
+  -> local duplicate/conflict verifier
   -> active or suggested memory record
   -> future retrieval into working context
 ```
@@ -85,9 +87,10 @@ The initial implementation is intentionally conservative:
 
 - SQLite stores every conversation and message.
 - `VEGA_MEMORY_MODEL` controls the local Ollama model used for memory classification.
-- If `VEGA_MEMORY_MODEL` is empty, memory jobs are skipped and chat still works.
+- `VEGA_MEMORY_GROUNDING_MODEL` controls the local Ollama model used to verify that a candidate is supported by user-authored messages. This defaults to the stronger local chat model because false memory writes are more expensive than extra latency.
+- `VEGA_MEMORY_VERIFIER_MODEL` controls the local Ollama model used for duplicate, conflict, and final save/reject decisions.
 - `VEGA_EMBEDDING_MODEL` optionally enables local embedding-based deduplication before storing a candidate.
-- The verifier is currently the classifier plus embedding dedupe path. A second verifier prompt or stronger verifier model should be added only after we collect local eval results showing it is needed.
+- The grounding verifier is intentionally separate from the extractor. The extractor proposes; the grounding verifier rejects unsupported claims, cites exact user quotes, and returns the supported memory content that will be stored.
 
 ## Retrieval Design
 

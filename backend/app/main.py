@@ -44,10 +44,13 @@ def choose_default_model(models):
 
 
 def is_internal_model(model_name: str) -> bool:
-    return model_name in {
+    internal_models = {
         settings.vega_memory_model,
         settings.vega_memory_verifier_model,
     }
+    if settings.vega_memory_grounding_model in internal_models:
+        internal_models.add(settings.vega_memory_grounding_model)
+    return model_name in internal_models
 
 
 @app.get("/api/health", response_model=HealthResponse)
@@ -253,6 +256,7 @@ async def chat(request: ChatRequest, background_tasks: BackgroundTasks) -> ChatR
         metadata={
             "job_id": job_id,
             "classifier_model": settings.vega_memory_model,
+            "grounding_model": settings.vega_memory_grounding_model,
             "verifier_model": settings.vega_memory_verifier_model,
             "embedding_model": settings.vega_embedding_model,
         },

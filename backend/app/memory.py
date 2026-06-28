@@ -25,7 +25,7 @@ The content field must be a complete, concise sentence that will be useful in a 
 Use only message ids that appear in allowed_source_message_ids.
 
 Output true case:
-{"should_store":true,"memory_type":"preference","content":"The user prefers concise engineering answers with concrete verification steps.","confidence":0.95,"importance":0.8,"rationale":"Stable user preference explicitly stated.","action":"save_new","related_memory_ids":[],"source_message_ids":["use-a-real-id-from-allowed_source_message_ids"]}
+{"should_store":true,"memory_type":"preference","content":"The user prefers concise answers.","confidence":0.95,"importance":0.8,"rationale":"Stable user preference explicitly stated.","action":"save_new","related_memory_ids":[],"source_message_ids":["use-a-real-id-from-allowed_source_message_ids"]}
 
 Output false case:
 {"should_store":false,"memory_type":"none","content":"","confidence":0.0,"importance":0.0,"rationale":"No durable reusable information.","action":"no_op","related_memory_ids":[],"source_message_ids":[]}
@@ -47,6 +47,40 @@ If there are no similar memories and the candidate is a clear durable user prefe
 
 Output shape:
 {"action":"save_new","confidence":0.95,"reason":"Clear durable memory and no duplicate was found.","target_memory_id":null}
+"""
+
+MEMORY_GROUNDING_PROMPT = """You are Vega's local memory grounding verifier. Return exactly one JSON object.
+
+Your task is to decide whether a proposed memory is actually supported by the user's messages.
+Assistant messages are context only. They are not evidence for user preferences, user facts, or project decisions.
+
+Accept only if the candidate is directly supported by user-authored evidence or by clear user intent.
+Reject if the candidate adds unsupported details, generalizes from the assistant's response, or turns a casual message into a preference.
+Use only ids from source_messages as evidence_message_ids.
+For grounded=true, include evidence_quotes copied exactly from user-authored source_messages.
+If no exact user quote supports the candidate, return grounded=false.
+For grounded=true, set supported_memory_content to the concise memory text supported by the evidence.
+If the candidate contains unsupported extra details, remove them from supported_memory_content and list them in unsupported_claims.
+If no durable memory remains after removing unsupported details, return grounded=false.
+
+Example:
+candidate content: "The user prefers short direct answers with concrete verification steps."
+source quote: "I prefer short direct answers."
+correct decision: grounded=true, supported_memory_content="The user prefers short direct answers.", unsupported_claims=["concrete verification steps"]
+
+Output grounded case:
+{"grounded":true,"confidence":0.95,"supported_memory_content":"The user prefers short direct answers.","evidence_message_ids":["real-user-message-id"],"evidence_quotes":["exact user text"],"unsupported_claims":[],"reason":"Explicit user preference."}
+
+Output rejected case:
+{"grounded":false,"confidence":0.9,"supported_memory_content":"","evidence_message_ids":[],"evidence_quotes":[],"unsupported_claims":["unsupported detail"],"reason":"Unsupported by user evidence."}
+
+Keep reason short. Do not put quotation marks inside reason.
+"""
+
+GROUNDING_RETRY_PROMPT = """Return one valid minified JSON object for memory grounding.
+Required keys: grounded, confidence, supported_memory_content, evidence_message_ids, evidence_quotes, unsupported_claims, reason.
+Do not include markdown. Do not include quotation marks inside reason.
+Only evidence_quotes may copy exact user text.
 """
 
 
@@ -103,81 +137,31 @@ def build_review_packet(conversation_id: str) -> str:
     )
 
 
-def valid_source_message_ids(conversation_id: str, ids: Any) -> list[str]:
-    if not isinstance(ids, list):
-        return []
-    valid_ids = {
-        message["id"]
-        for message in database.recent_messages(conversation_id, limit=10)
-        if message["role"] == "user"
-    }
-    return [message_id for message_id in ids if isinstance(message_id, str) and message_id in valid_ids]
-
-
-STOPWORDS = {
-    "about",
-    "assistant",
-    "future",
-    "memory",
-    "prefer",
-    "prefers",
-    "preference",
-    "question",
-    "questions",
-    "response",
-    "responses",
-    "their",
-    "there",
-    "user",
-    "vega",
-    "with",
-}
-
-
-def content_tokens(value: str) -> set[str]:
+def user_source_messages(conversation_id: str) -> dict[str, dict[str, Any]]:
     return {
-        token
-        for token in re.findall(r"[a-zA-Z0-9]+", value.lower())
-        if len(token) >= 4 and token not in STOPWORDS
-    }
-
-
-def validate_candidate_grounding(
-    *,
-    conversation_id: str,
-    candidate: dict[str, Any],
-    content: str,
-) -> tuple[bool, str, list[str]]:
-    source_message_ids = valid_source_message_ids(conversation_id, candidate.get("source_message_ids", []))
-    messages = {
         message["id"]: message
         for message in database.recent_messages(conversation_id, limit=10)
         if message["role"] == "user"
     }
-    if not source_message_ids:
-        source_message_ids = list(messages.keys())
-        source_id_reason = "Candidate omitted valid source ids; grounding was checked against recent user messages."
-    else:
-        source_id_reason = "Candidate is grounded in cited user-authored source messages."
 
-    if not source_message_ids:
-        return False, "No user-authored source messages were available.", []
 
-    evidence = " ".join(messages[message_id]["content"] for message_id in source_message_ids if message_id in messages)
-    evidence_tokens = content_tokens(evidence)
-    memory_tokens = content_tokens(content)
-    if not memory_tokens:
-        return False, "Candidate content had no meaningful grounded terms.", source_message_ids
+def valid_source_message_ids(conversation_id: str, ids: Any) -> list[str]:
+    if not isinstance(ids, list):
+        return []
+    valid_ids = set(user_source_messages(conversation_id))
+    return [message_id for message_id in ids if isinstance(message_id, str) and message_id in valid_ids]
 
-    overlap = memory_tokens & evidence_tokens
-    support_ratio = len(overlap) / len(memory_tokens)
-    if not overlap or support_ratio < 0.4:
-        return (
-            False,
-            "Candidate content was not grounded in the cited user message text.",
-            source_message_ids,
-        )
-    return True, source_id_reason, source_message_ids
+
+def grounding_decision_is_prompt_echo(decision: dict[str, Any]) -> bool:
+    return any(key in decision for key in {"candidate", "source_messages", "assistant_context_not_evidence"})
+
+
+def valid_evidence_quotes(conversation_id: str, quotes: Any, source_message_ids: list[str]) -> list[str]:
+    if not isinstance(quotes, list):
+        return []
+    sources = user_source_messages(conversation_id)
+    evidence_text = "\n".join(sources[message_id]["content"] for message_id in source_message_ids if message_id in sources)
+    return [quote for quote in quotes if isinstance(quote, str) and quote.strip() and quote in evidence_text]
 
 
 def looks_like_prompt_echo(value: str) -> bool:
@@ -288,33 +272,82 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
             database.complete_memory_job(job_id, status="completed")
             return
 
-        grounded, grounding_reason, source_message_ids = validate_candidate_grounding(
+        grounding_decision = await verify_memory_grounding(
             conversation_id=conversation_id,
             candidate=candidate,
-            content=content,
+            run_id=run_id,
         )
+        grounded = bool(grounding_decision.get("grounded"))
+        grounding_confidence = clamp_score(grounding_decision.get("confidence")) or 0.0
+        source_message_ids = valid_source_message_ids(
+            conversation_id,
+            grounding_decision.get("evidence_message_ids", []),
+        )
+        evidence_quotes = valid_evidence_quotes(
+            conversation_id,
+            grounding_decision.get("evidence_quotes", []),
+            source_message_ids,
+        )
+        supported_content = str(grounding_decision.get("supported_memory_content") or "").strip()
+
+        if grounding_decision_is_prompt_echo(grounding_decision):
+            grounded = False
+            grounding_decision = {
+                "grounded": False,
+                "confidence": 0.0,
+                "supported_memory_content": "",
+                "evidence_message_ids": [],
+                "evidence_quotes": [],
+                "unsupported_claims": ["Grounding verifier echoed the prompt packet."],
+                "reason": "Grounding verifier returned prompt-shaped output instead of a decision.",
+            }
+            evidence_quotes = []
+            supported_content = ""
+
         if not grounded:
             database.add_trace_event(
                 run_id=run_id,
                 step="memory.grounding",
                 status="completed",
-                message="Candidate rejected because it was not grounded in user-authored source messages.",
+                message="Grounding verifier rejected the memory candidate.",
+                metadata=grounding_decision,
+            )
+            database.complete_memory_job(job_id, status="completed")
+            return
+        if (
+            grounding_confidence < 0.7
+            or not source_message_ids
+            or not evidence_quotes
+            or not supported_content
+            or looks_like_prompt_echo(supported_content)
+        ):
+            database.add_trace_event(
+                run_id=run_id,
+                step="memory.grounding",
+                status="completed",
+                message="Grounding verifier decision did not meet confidence, source, or quote requirements.",
                 metadata={
-                    "reason": grounding_reason,
-                    "candidate_content": content,
-                    "source_message_ids": source_message_ids,
+                    **grounding_decision,
+                    "valid_evidence_message_ids": source_message_ids,
+                    "valid_evidence_quotes": evidence_quotes,
+                    "supported_memory_content": supported_content,
                 },
             )
             database.complete_memory_job(job_id, status="completed")
             return
+        content = supported_content
+        candidate["content"] = content
+        candidate["source_message_ids"] = source_message_ids
         database.add_trace_event(
             run_id=run_id,
             step="memory.grounding",
             status="completed",
-            message="Candidate passed user-source grounding checks.",
+            message="Grounding verifier accepted the memory candidate.",
             metadata={
-                "reason": grounding_reason,
+                **grounding_decision,
+                "stored_content": content,
                 "source_message_ids": source_message_ids,
+                "evidence_quotes": evidence_quotes,
             },
         )
 
@@ -388,9 +421,11 @@ async def classify_memory_for_conversation(conversation_id: str, job_id: str, ru
                 "verified_action": verified_action,
                 "related_memory_ids": candidate.get("related_memory_ids", []),
                 "classifier_model": settings.vega_memory_model,
+                "grounding_model": settings.vega_memory_grounding_model,
                 "verifier_model": settings.vega_memory_verifier_model,
                 "embedding_model": embedding_model,
                 "similar_memory_ids": [memory["id"] for memory in similar_memories],
+                "grounding": grounding_decision,
                 "verifier": verifier_decision,
             },
         )
@@ -470,3 +505,78 @@ async def verify_memory_candidate(
         metadata=decision,
     )
     return decision
+
+
+async def verify_memory_grounding(
+    *,
+    conversation_id: str,
+    candidate: dict[str, Any],
+    run_id: str,
+) -> dict[str, Any]:
+    database.add_trace_event(
+        run_id=run_id,
+        step="memory.grounding",
+        status="started",
+        message="Verifying memory candidate against user-authored evidence.",
+        metadata={"model": settings.vega_memory_grounding_model},
+    )
+    recent_messages = database.recent_messages(conversation_id, limit=10)
+    source_messages = [
+        {
+            "id": message["id"],
+            "role": message["role"],
+            "content": message["content"],
+        }
+        for message in recent_messages
+        if message["role"] == "user"
+    ]
+    assistant_context = [
+        {
+            "id": message["id"],
+            "role": message["role"],
+            "content": message["content"],
+        }
+        for message in recent_messages
+        if message["role"] == "assistant"
+    ]
+    packet = json.dumps(
+        {
+            "candidate": candidate,
+            "source_messages": source_messages,
+            "assistant_context_not_evidence": assistant_context,
+            "allowed_evidence_message_ids": [message["id"] for message in source_messages],
+        },
+        ensure_ascii=False,
+    )
+    response = await ollama_client.chat(
+        model=settings.vega_memory_grounding_model,
+        temperature=0,
+        think=False,
+        response_format="json",
+        messages=[
+            ChatMessage(role="system", content=MEMORY_GROUNDING_PROMPT),
+            ChatMessage(role="user", content=packet),
+        ],
+    )
+    try:
+        return extract_json_object(response.content)
+    except (ValueError, json.JSONDecodeError):
+        database.add_trace_event(
+            run_id=run_id,
+            step="memory.grounding",
+            status="failed",
+            message="Grounding verifier returned malformed JSON; retrying with stricter format prompt.",
+            metadata={"raw_output": response.content[:1000]},
+        )
+
+    retry_response = await ollama_client.chat(
+        model=settings.vega_memory_grounding_model,
+        temperature=0,
+        think=False,
+        response_format="json",
+        messages=[
+            ChatMessage(role="system", content=GROUNDING_RETRY_PROMPT),
+            ChatMessage(role="user", content=packet),
+        ],
+    )
+    return extract_json_object(retry_response.content)

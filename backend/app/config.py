@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 DEFAULT_MEMORY_MODEL = "hf.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF:latest"
+DEFAULT_MEMORY_GROUNDING_MODEL = "qwen3.5:9b"
 
 
 class Settings(BaseSettings):
@@ -8,6 +9,7 @@ class Settings(BaseSettings):
     vega_default_model: str = ""
     vega_database_path: str = "storage/vega.db"
     vega_memory_model: str = DEFAULT_MEMORY_MODEL
+    vega_memory_grounding_model: str = DEFAULT_MEMORY_GROUNDING_MODEL
     vega_memory_verifier_model: str = DEFAULT_MEMORY_MODEL
     vega_embedding_model: str = ""
 
